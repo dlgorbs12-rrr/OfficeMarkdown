@@ -1,0 +1,9 @@
+/dist/
+/target/
+/release/
+.idea/
+.vscode/
+*.iml
+.env
+.env.*
+__pycache__/
