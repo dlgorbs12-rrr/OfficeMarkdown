@@ -21,6 +21,7 @@ public final class OfficeMarkdown {
     private final JButton largeOptions = new JButton("대용량 색인 관리");
     private final JButton ocrOnly = new JButton("OCR만 실행");
     private final JCheckBox latestOnly = new JCheckBox("폴더별 최신본만");
+    private final JCheckBox importOcr = new JCheckBox("추가할 때 OCR");
     private final JCheckBox reconvertSameName = new JCheckBox("같은 파일명 다시 변환", true);
     private static final int AUTOMATIC_WORKERS = 0;
     private final JComboBox<Integer> conversionWorkers = new JComboBox<>(new Integer[]{1, 2, AUTOMATIC_WORKERS});
@@ -150,6 +151,9 @@ public final class OfficeMarkdown {
         JPanel batchOptions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
         reconvertSameName.setToolTipText("끄면 폴더 위치와 관계없이 같은 이름과 확장자의 변환 결과가 있는 파일을 건너뜁니다.");
         latestOnly.setToolTipText("같은 폴더의 버전·날짜별 문서를 비교해 변환 대상을 확인합니다.");
+        importOcr.setToolTipText("파일이나 폴더를 추가하면서 그림의 글자도 인식합니다.");
+        importOcr.addActionListener(e -> updateWorkerChoice());
+        batchOptions.add(importOcr);
         batchOptions.add(latestOnly);
         batchOptions.add(reconvertSameName);
         JPanel importOptions = LibraryStyle.panel(new BorderLayout(),0);
@@ -519,8 +523,11 @@ public final class OfficeMarkdown {
     }
 
     private void updateWorkerChoice() {
-        var engine = ocrMode.getSelectedItem();
-        ocrOnly.setEnabled(!working && engine != ImageOcr.Mode.OFF);
+        var selected = (ImageOcr.Mode) ocrMode.getSelectedItem();
+        if (selected == ImageOcr.Mode.OFF) importOcr.setSelected(false);
+        importOcr.setEnabled(!working && selected != ImageOcr.Mode.OFF);
+        ocrOnly.setEnabled(!working && selected != ImageOcr.Mode.OFF);
+        var engine = importOcr.isSelected() ? selected : ImageOcr.Mode.OFF;
         boolean canRunTwo = engine == ImageOcr.Mode.WINDOWS || engine == ImageOcr.Mode.OFF;
         if (canRunTwo) {
             setWorkerChoices(1, 2, AUTOMATIC_WORKERS);
@@ -789,20 +796,39 @@ public final class OfficeMarkdown {
         JOptionPane.showMessageDialog(frame, new JScrollPane(log), title, JOptionPane.WARNING_MESSAGE);
     }
 
-    private boolean confirmEngine(ImageOcr.Mode engine) {
-        try { ImageOcr.validate(engine); } catch(IOException e) { error(e); return false; }
+    private ImageOcr.Mode confirmEngine(ImageOcr.Mode engine, boolean importing) {
+        if (engine == ImageOcr.Mode.OFF) return engine;
+        try {
+            ImageOcr.validate(engine);
+        } catch (IOException e) {
+            Object[] choices = importing
+                    ? new String[]{"Windows OCR로 계속", "OCR 끄고 변환", "취소"}
+                    : new String[]{"Windows OCR로 계속", "취소"};
+            int choice = JOptionPane.showOptionDialog(frame, e.getMessage(), "OCR 설정 확인",
+                    JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, choices, choices[0]);
+            if (choice == 0) {
+                ocrMode.setSelectedItem(ImageOcr.Mode.WINDOWS);
+                return ImageOcr.Mode.WINDOWS;
+            }
+            if (importing && choice == 1) {
+                importOcr.setSelected(false);
+                updateWorkerChoice();
+                return ImageOcr.Mode.OFF;
+            }
+            return null;
+        }
         if(engine==ImageOcr.Mode.VISION && JOptionPane.showConfirmDialog(frame,
                 "선택한 문서의 그림을 설정된 비전 API로 보냅니다.\n대상: "+
                 System.getenv().getOrDefault("OPENAI_BASE_URL","https://api.openai.com/v1")+
                 "\n모델: "+System.getenv("OFFICEMD_VISION_MODEL")+"\n계속할까요?",
-                "비전 OCR",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION) return false;
-        return true;
+                "비전 OCR",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION) return null;
+        return engine;
     }
 
     private void chooseOcrNotes() {
         if (working) return;
-        var engine = (ImageOcr.Mode) ocrMode.getSelectedItem();
-        if (engine == ImageOcr.Mode.OFF) return;
+        var selected = (ImageOcr.Mode) ocrMode.getSelectedItem();
+        if (selected == ImageOcr.Mode.OFF) return;
         JFileChooser picker = new JFileChooser(library.toFile());
         picker.setDialogTitle("OCR만 실행할 Markdown 선택");
         picker.setFileFilter(new FileNameExtensionFilter("변환된 Markdown", "md"));
@@ -811,7 +837,9 @@ public final class OfficeMarkdown {
         if (hit != null) picker.setSelectedFile(hit.md().toFile());
         if (picker.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
         var notes = Arrays.stream(picker.getSelectedFiles()).map(java.io.File::toPath).toList();
-        if (notes.isEmpty() || !confirmEngine(engine)) return;
+        if (notes.isEmpty()) return;
+        var engine = confirmEngine(selected, false);
+        if (engine == null) return;
         busy(true, "보존된 그림 확인 중…");
         new SwingWorker<Void, String>() {
             int recognized, skipped, deferred, withoutPictures, alreadyDone;
@@ -908,8 +936,9 @@ public final class OfficeMarkdown {
 
     private void importFiles(List<java.io.File> inputs) {
         if (working || inputs.isEmpty()) return;
-        var engine=(ImageOcr.Mode)ocrMode.getSelectedItem();
-        if (!confirmEngine(engine)) return;
+        var selected = (ImageOcr.Mode) ocrMode.getSelectedItem();
+        var engine = confirmEngine(importOcr.isSelected() ? selected : ImageOcr.Mode.OFF, true);
+        if (engine == null) return;
         boolean filterLatest = latestOnly.isSelected();
         boolean reconvert = reconvertSameName.isSelected();
         int workers = (Integer) conversionWorkers.getSelectedItem();
