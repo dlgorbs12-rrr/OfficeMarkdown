@@ -32,6 +32,7 @@ public final class OfficeMarkdown {
     private final JTextArea preview = new JTextArea(6, 50);
     private final JLabel status = new JLabel(" ");
     private final JLabel indexStatus = new JLabel(" ");
+    private final JLabel updateStatus = new JLabel();
     private final JButton syncIndex = new JButton("색인 새로 고침");
     private static final int LIMIT = 500;
 
@@ -89,6 +90,21 @@ public final class OfficeMarkdown {
     }
 
     private void show() {
+        var updates = new UpdateDialog(frame, () -> working || indexWorker != null ||
+                (agentDialog != null && agentDialog.isAnswering()),
+                () -> frame.dispatchEvent(new java.awt.event.WindowEvent(frame, java.awt.event.WindowEvent.WINDOW_CLOSING)),
+                message -> {
+                    updateStatus.setText(message);
+                    updateStatus.setVisible(message != null && !message.isBlank());
+                });
+        JMenu updateMenu = new JMenu("업데이트");
+        JMenuItem checkUpdate = new JMenuItem("업데이트 확인");
+        checkUpdate.addActionListener(e -> updates.checkManually());
+        updateMenu.add(checkUpdate);
+        updateMenu.add(updates.autoCheckItem());
+        JMenuBar menus = new JMenuBar();
+        menus.add(updateMenu);
+        frame.setJMenuBar(menus);
         JPanel body = new JPanel(new BorderLayout());
         body.setBackground(LibraryStyle.CANVAS);
         JPanel head = LibraryStyle.panel(new BorderLayout(16,0), 16);
@@ -249,6 +265,9 @@ public final class OfficeMarkdown {
         largeOptions.addActionListener(e -> manageLarge());
         ocrOnly.addActionListener(e -> chooseOcrNotes());
         indexLine.add(indexStatus); indexLine.add(indexActions,BorderLayout.EAST); footer.add(indexLine,BorderLayout.SOUTH);
+        updateStatus.setForeground(LibraryStyle.MUTED);
+        updateStatus.setVisible(false);
+        footer.add(updateStatus, BorderLayout.CENTER);
         body.add(footer,BorderLayout.SOUTH);
 
         results.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) selection(); });
@@ -322,6 +341,7 @@ public final class OfficeMarkdown {
         frame.setContentPane(body); frame.setSize(1160,780); frame.setMinimumSize(new Dimension(720,490));
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE); frame.setLocationRelativeTo(null);
         frame.setVisible(true); split.setDividerLocation(.32); query.requestFocusInWindow(); refresh("");
+        updates.checkOnStartup();
     }
 
     private void key(JComponent target,String key,Runnable action) {

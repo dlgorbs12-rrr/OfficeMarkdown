@@ -25,6 +25,8 @@ final class AgentDialog extends JDialog {
     private List<DocumentAgent.Claim> claims=List.of();
     private SwingWorker<List<DocumentAgent.Claim>,String> task;
 
+    boolean isAnswering() { return task != null && !task.isDone(); }
+
     AgentDialog(JFrame parent,Path library,Consumer<Library.Hit> preview,Consumer<Library.Hit> openOriginal){
         super(parent,"문서에 질문",false);
         this.library=library;
