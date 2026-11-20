@@ -17,8 +17,9 @@ import org.apache.poi.ss.util.CellReference;
 
 final class Library {
     static boolean supported(Path path) {
+        if (path.getFileName() == null) return false;
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
-        return !name.startsWith("~$") && name.matches(".*\\.(pptx?|xlsx?)");
+        return !name.startsWith("~$") && name.matches(".*\\.(pptx?|xlsx?|docx?|pdf)");
     }
 
     static Path convert(Path source, Path library) throws Exception {
@@ -47,6 +48,12 @@ final class Library {
                     try (Workbook book = WorkbookFactory.create(file.toFile(), null, true)) {
                         spreadsheet(book, out, pictures);
                     }
+                } else if (ext.equals("pdf")) {
+                    PdfConversion.write(file, out, pictures);
+                } else if (ext.equals("docx")) {
+                    WordConversion.writeDocx(file, out, pictures);
+                } else if (ext.equals("doc")) {
+                    WordConversion.writeDoc(file, out, pictures);
                 } else {
                     try (InputStream in = Files.newInputStream(file);
                          SlideShow<?, ?> show = ext.equals("ppt") ? new HSLFSlideShow(in) : new XMLSlideShow(in)) {

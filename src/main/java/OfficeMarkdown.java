@@ -18,6 +18,9 @@ public final class OfficeMarkdown {
     private final JButton search = new JButton("검색"), add = new JButton("파일 추가"), folder = new JButton("폴더 추가");
     private final JButton findBrokenOcr = new JButton("OCR 깨짐 점검");
     private final JButton repairOcr = new JButton("선택 그림 재인식");
+    private final JButton largeOptions = new JButton("대용량 색인 관리");
+    private final JButton ocrOnly = new JButton("OCR만 실행");
+    private final JCheckBox latestOnly = new JCheckBox("폴더별 최신본만");
     private final JCheckBox reconvertSameName = new JCheckBox("같은 파일명 다시 변환", true);
     private static final int AUTOMATIC_WORKERS = 0;
     private final JComboBox<Integer> conversionWorkers = new JComboBox<>(new Integer[]{1, 2, AUTOMATIC_WORKERS});
@@ -127,7 +130,7 @@ public final class OfficeMarkdown {
         JPanel imageOptions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
         JLabel imageLabel=new JLabel("그림 글자 인식");
         imageLabel.setLabelFor(ocrMode); imageOptions.add(imageLabel); imageOptions.add(ocrMode);
-        ocrMode.setToolTipText("PPTX·XLSX를 추가할 때 사용할 OCR 방식");
+        ocrMode.setToolTipText("그림을 인식할 때 사용할 OCR 방식");
         JLabel parallelLabel = new JLabel("동시 변환");
         parallelLabel.setLabelFor(conversionWorkers);
         conversionWorkers.setRenderer(new DefaultListCellRenderer() {
@@ -140,10 +143,14 @@ public final class OfficeMarkdown {
         conversionWorkers.setPrototypeDisplayValue(AUTOMATIC_WORKERS);
         imageOptions.add(parallelLabel);
         imageOptions.add(conversionWorkers);
+        imageOptions.add(ocrOnly);
+        ocrOnly.setToolTipText("변환본에 저장된 그림의 OCR만 실행합니다.");
         ocrMode.addActionListener(e -> updateWorkerChoice());
         updateWorkerChoice();
         JPanel batchOptions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
         reconvertSameName.setToolTipText("끄면 폴더 위치와 관계없이 같은 이름과 확장자의 변환 결과가 있는 파일을 건너뜁니다.");
+        latestOnly.setToolTipText("같은 폴더의 버전·날짜별 문서를 비교해 변환 대상을 확인합니다.");
+        batchOptions.add(latestOnly);
         batchOptions.add(reconvertSameName);
         JPanel importOptions = LibraryStyle.panel(new BorderLayout(),0);
         importOptions.add(imageOptions);
@@ -162,7 +169,7 @@ public final class OfficeMarkdown {
         searchActions.add(findBrokenOcr); searchActions.add(search);
         bar.add(filters,BorderLayout.WEST); bar.add(query); bar.add(searchActions,BorderLayout.EAST);
         searchBox.add(bar); workspace.add(searchBox,BorderLayout.NORTH);
-        for (JButton b : List.of(search,findBrokenOcr,repairOcr,original,locate,note,pictureLocation,emptyButton))
+        for (JButton b : List.of(search,findBrokenOcr,repairOcr,ocrOnly,largeOptions,original,locate,note,pictureLocation,emptyButton))
             LibraryStyle.button(b,b==search || b==original || b==emptyButton);
 
         JPanel left = LibraryStyle.card(new BorderLayout(0,10));
@@ -232,7 +239,12 @@ public final class OfficeMarkdown {
         syncIndex.setToolTipText("Markdown 폴더의 변경 내용을 색인에 반영합니다.");
         LibraryStyle.button(syncIndex, false);
         syncIndex.addActionListener(e -> startIndexSync());
-        indexLine.add(indexStatus); indexLine.add(syncIndex,BorderLayout.EAST); footer.add(indexLine,BorderLayout.SOUTH);
+        JPanel indexActions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT, 6, 0), 0);
+        indexActions.add(largeOptions);
+        indexActions.add(syncIndex);
+        largeOptions.addActionListener(e -> manageLarge());
+        ocrOnly.addActionListener(e -> chooseOcrNotes());
+        indexLine.add(indexStatus); indexLine.add(indexActions,BorderLayout.EAST); footer.add(indexLine,BorderLayout.SOUTH);
         body.add(footer,BorderLayout.SOUTH);
 
         results.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) selection(); });
@@ -480,7 +492,7 @@ public final class OfficeMarkdown {
             if (reveal) new ProcessBuilder("explorer.exe", "/select,", file.toString()).start();
             else if (markdown) new ProcessBuilder("notepad.exe", file.toString()).start();
             else if (Library.supported(file)) Desktop.getDesktop().open(file.toFile());
-            else throw new IOException("PowerPoint 또는 Excel 원본 파일을 선택하세요.");
+            else throw new IOException("지원하는 원본 문서를 선택하세요.");
         } catch (Exception ex) { error(ex); }
     }
 
@@ -496,6 +508,8 @@ public final class OfficeMarkdown {
         var hit = selectedHit();
         repairOcr.setEnabled(resultView != ResultView.DOCUMENT && !value && hit != null && hit.picture() != null);
         scope.setEnabled(!value); query.setEditable(!value); mode.setEnabled(!value);
+        latestOnly.setEnabled(!value);
+        largeOptions.setEnabled(!value && indexWorker == null);
         ocrMode.setEnabled(!value); reconvertSameName.setEnabled(!value);
         syncIndex.setEnabled(!value && indexWorker == null);
         updateWorkerChoice();
@@ -506,6 +520,7 @@ public final class OfficeMarkdown {
 
     private void updateWorkerChoice() {
         var engine = ocrMode.getSelectedItem();
+        ocrOnly.setEnabled(!working && engine != ImageOcr.Mode.OFF);
         boolean canRunTwo = engine == ImageOcr.Mode.WINDOWS || engine == ImageOcr.Mode.OFF;
         if (canRunTwo) {
             setWorkerChoices(1, 2, AUTOMATIC_WORKERS);
@@ -623,8 +638,8 @@ public final class OfficeMarkdown {
         boolean indexing = !startupSyncStarted || indexWorker != null;
         String emptyHeading = indexing ? "색인된 문서가 아직 없습니다" : "첫 문서를 추가하세요";
         emptyTitle.setText(showImport ? emptyHeading : "검색 결과가 없습니다");
-        emptyHint.setText(showImport ? "PowerPoint·Excel 파일이나 폴더를 이곳에 끌어오세요."
-                : pictures ? "검색어를 줄이거나 기존 PPTX·XLSX를 다시 추가해 보세요."
+        emptyHint.setText(showImport ? "PowerPoint·Excel·Word·PDF 파일이나 폴더를 이곳에 끌어오세요."
+                : pictures ? "검색어를 줄이거나 그림이 있는 문서를 추가해 보세요."
                 : "검색어를 줄이거나 전체 문서 목록을 확인하세요.");
         emptyButton.setText(showImport ? "파일 선택" : "전체 문서 보기");
         showHits(hits, previous);
@@ -636,11 +651,12 @@ public final class OfficeMarkdown {
         if (indexWorker != null) return;
         startupSyncStarted = true;
         syncIndex.setEnabled(false);
+        largeOptions.setEnabled(false);
         indexStatus.setToolTipText(null);
         indexStatus.setText("색인 확인 중…");
         indexWorker = new SwingWorker<>() {
             private boolean readFirstSnapshot;
-            private SearchIndex.Progress latest = new SearchIndex.Progress(0, 0, 0);
+            private SearchIndex.Progress latest = new SearchIndex.Progress(0, 0, 0, 0);
 
             protected Void doInBackground() throws Exception {
                 SearchIndex.synchronize(library, this::publish);
@@ -660,6 +676,7 @@ public final class OfficeMarkdown {
             protected void done() {
                 indexWorker = null;
                 syncIndex.setEnabled(!working);
+                largeOptions.setEnabled(!working);
                 try {
                     get();
                     indexStatus.setText(indexProgressText("색인 확인 완료", latest));
@@ -675,7 +692,7 @@ public final class OfficeMarkdown {
 
     private static String indexProgressText(String label, SearchIndex.Progress latest) {
         return label + " · 확인 " + latest.checked() + "건 · 갱신 " + latest.updated()
-                + "건 · 제거 " + latest.removed() + "건";
+                + "건 · 제거 " + latest.removed() + "건 · 대용량 보류 " + latest.deferred() + "건";
     }
 
     private void searchAfterWork(String summary) {
@@ -718,7 +735,8 @@ public final class OfficeMarkdown {
                     if (!changed.isEmpty()) {
                         publish(new RepairProgress(processed, "변경된 문서 색인 중"));
                         try {
-                            indexFailures = changed.size() - SearchIndex.indexCompleted(library, changed);
+                            var result = SearchIndex.indexCompletedDetailed(library, changed);
+                            indexFailures = changed.size() - result.indexed() - result.deferred();
                         } catch (IOException e) {
                             indexFailures = changed.size();
                             failures.add("변경된 문서 색인을 완료하지 못했습니다.\n" + e.getMessage());
@@ -771,12 +789,117 @@ public final class OfficeMarkdown {
         JOptionPane.showMessageDialog(frame, new JScrollPane(log), title, JOptionPane.WARNING_MESSAGE);
     }
 
+    private boolean confirmEngine(ImageOcr.Mode engine) {
+        try { ImageOcr.validate(engine); } catch(IOException e) { error(e); return false; }
+        if(engine==ImageOcr.Mode.VISION && JOptionPane.showConfirmDialog(frame,
+                "선택한 문서의 그림을 설정된 비전 API로 보냅니다.\n대상: "+
+                System.getenv().getOrDefault("OPENAI_BASE_URL","https://api.openai.com/v1")+
+                "\n모델: "+System.getenv("OFFICEMD_VISION_MODEL")+"\n계속할까요?",
+                "비전 OCR",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION) return false;
+        return true;
+    }
+
+    private void chooseOcrNotes() {
+        if (working) return;
+        var engine = (ImageOcr.Mode) ocrMode.getSelectedItem();
+        if (engine == ImageOcr.Mode.OFF) return;
+        JFileChooser picker = new JFileChooser(library.toFile());
+        picker.setDialogTitle("OCR만 실행할 Markdown 선택");
+        picker.setFileFilter(new FileNameExtensionFilter("변환된 Markdown", "md"));
+        picker.setMultiSelectionEnabled(true);
+        var hit = selectedHit();
+        if (hit != null) picker.setSelectedFile(hit.md().toFile());
+        if (picker.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+        var notes = Arrays.stream(picker.getSelectedFiles()).map(java.io.File::toPath).toList();
+        if (notes.isEmpty() || !confirmEngine(engine)) return;
+        busy(true, "보존된 그림 확인 중…");
+        new SwingWorker<Void, String>() {
+            int recognized, skipped, deferred, withoutPictures, alreadyDone;
+            final List<String> issues = new ArrayList<>();
+            protected Void doInBackground() throws Exception {
+                try (var ocr = new ImageOcr(engine, ImageOcr.scripts())) {
+                    for (var note : notes) {
+                        publish(note.getFileName().toString());
+                        try {
+                            var state = OcrBackfill.inspect(library, note);
+                            if (state.pending() == 0) {
+                                if (state.pictures() == 0) withoutPictures++;
+                                else alreadyDone++;
+                                continue;
+                            }
+                            var result = OcrBackfill.run(library, note, ocr);
+                            recognized += result.recognized();
+                            skipped += result.skipped();
+                            if (result.recognized() + result.skipped() > 0) {
+                                var completion = SearchIndex.indexCompletedDetailed(library, List.of(note));
+                                deferred += completion.deferred();
+                                if (completion.indexed() + completion.deferred() == 0)
+                                    issues.add(note.getFileName() + " · 검색 색인 갱신을 확인해 주세요.");
+                            }
+                        } catch (IOException ex) { issues.add(note.getFileName() + " · " + ex.getMessage()); }
+                    }
+                    issues.addAll(ocr.warnings);
+                }
+                return null;
+            }
+            protected void process(List<String> names) { status.setText("OCR만 실행 중 · " + names.getLast()); }
+            protected void done() {
+                try { get(); } catch (Exception ex) { error(ex); }
+                showNotices(issues, "OCR 처리 알림");
+                searchAfterWork("그림 OCR 완료 " + recognized + "개 · 건너뜀 " + skipped
+                        + "개 · 대용량 색인 보류 " + deferred + "건"
+                        + (alreadyDone == 0 ? "" : " · 처리할 그림 없는 문서 " + alreadyDone + "건")
+                        + (withoutPictures == 0 ? "" : " · 보존 그림 없는 문서 " + withoutPictures + "건")
+                        + "     ");
+            }
+        }.execute();
+    }
+
+    private void manageLarge() {
+        if (working || indexWorker != null) return;
+        busy(true, "대용량 보류 목록 확인 중…");
+        new SwingWorker<SearchIndex.LargeSettings, Void>() {
+            protected SearchIndex.LargeSettings doInBackground() throws Exception {
+                return SearchIndex.largeSettings(library);
+            }
+            protected void done() {
+                try {
+                    var settings = get();
+                    JCheckBox hold = new JCheckBox("100 MB 초과 Markdown의 자동 색인 보류", settings.hold());
+                    JList<SearchIndex.HeldNote> pending = new JList<>(settings.pending().toArray(SearchIndex.HeldNote[]::new));
+                    pending.setVisibleRowCount(8);
+                    Object[] fields = {hold, "자동 색인을 허용할 문서를 선택하세요.", new JScrollPane(pending)};
+                    if (JOptionPane.showConfirmDialog(frame, fields, "대용량 색인 관리",
+                            JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
+                        applyLarge(hold.isSelected(), pending.getSelectedValuesList().stream()
+                                .map(SearchIndex.HeldNote::path).toList());
+                        return;
+                    }
+                } catch (Exception ex) { error(ex); }
+                searchAfterWork("");
+            }
+        }.execute();
+    }
+
+    private void applyLarge(boolean hold, List<Path> allow) {
+        new SwingWorker<Void, Void>() {
+            protected Void doInBackground() throws Exception {
+                SearchIndex.configureLarge(library, hold, allow);
+                return null;
+            }
+            protected void done() {
+                busy(false, "");
+                try { get(); startIndexSync(); } catch (Exception ex) { error(ex); }
+            }
+        }.execute();
+    }
+
     private void choose(boolean directory) {
         JFileChooser picker = new JFileChooser();
         if (directory) picker.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         else {
             picker.setMultiSelectionEnabled(true);
-            picker.setFileFilter(new FileNameExtensionFilter("PowerPoint 및 Excel", "ppt", "pptx", "xls", "xlsx"));
+            picker.setFileFilter(new FileNameExtensionFilter("PowerPoint · Excel · Word · PDF", "ppt", "pptx", "xls", "xlsx", "doc", "docx", "pdf"));
         }
         if (picker.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
         var inputs = directory ? List.of(picker.getSelectedFile()) : Arrays.asList(picker.getSelectedFiles());
@@ -786,23 +909,24 @@ public final class OfficeMarkdown {
     private void importFiles(List<java.io.File> inputs) {
         if (working || inputs.isEmpty()) return;
         var engine=(ImageOcr.Mode)ocrMode.getSelectedItem();
-        try { ImageOcr.validate(engine); } catch(IOException e) { error(e); return; }
-        if(engine==ImageOcr.Mode.VISION && JOptionPane.showConfirmDialog(frame,
-                "선택한 문서의 그림을 설정된 비전 API로 보냅니다.\n대상: "+
-                System.getenv().getOrDefault("OPENAI_BASE_URL","https://api.openai.com/v1")+
-                "\n모델: "+System.getenv("OFFICEMD_VISION_MODEL")+"\n계속할까요?",
-                "비전 OCR",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION) return;
+        if (!confirmEngine(engine)) return;
+        boolean filterLatest = latestOnly.isSelected();
         boolean reconvert = reconvertSameName.isSelected();
         int workers = (Integer) conversionWorkers.getSelectedItem();
         var paths = inputs.stream().map(java.io.File::toPath).toList();
         busy(true, "변환할 파일을 찾는 중…");
         new SwingWorker<BatchConversion.Result, BatchConversion.Progress>() {
             protected BatchConversion.Result doInBackground() throws Exception {
-                return BatchConversion.run(paths, library, reconvert, engine, workers, this::publish);
+                return BatchConversion.run(paths, library, reconvert, engine, workers, this::publish,
+                        filterLatest ? preview -> LatestVersionDialog.confirm(frame, preview) : null);
             }
             protected void process(List<BatchConversion.Progress> updates) {
                 var latest = updates.getLast();
-                if (latest.phase() == BatchConversion.Phase.SCANNING) {
+                if (latest.phase() == BatchConversion.Phase.PREVIEW) {
+                    status.setText("최신본 변환 대상 확인 중…");
+                } else if (latest.phase() == BatchConversion.Phase.INDEXING) {
+                    showProgress(latest.processed(), latest.total(), "검색 색인 작성 중 · " + latest.current());
+                } else if (latest.phase() == BatchConversion.Phase.SCANNING) {
                     String phase = "기존 변환 확인".equals(latest.current()) ? "기존 변환 확인 중" : "파일 찾는 중";
                     status.setText(phase + " · 확인 " + latest.scanned() + "개 · 변환 대상 " + latest.total() + "개");
                 } else {
@@ -810,18 +934,23 @@ public final class OfficeMarkdown {
                     String parallel = (workers == AUTOMATIC_WORKERS ? "자동 동시 한도 " : "동시 한도 ") + latest.workers();
                     showProgress(latest.processed(),latest.total(),"변환 중 · 완료 " + latest.converted()
                             + " · 건너뜀 " + latest.skipped() + " · 실패 " + latest.failed()
-                            + " · 색인 " + latest.indexed() + " · " + parallel + current);
+                            + " · 색인 " + latest.indexed() + " · 대용량 보류 " + latest.deferred() + " · " + parallel + current);
                 }
             }
             protected void done() {
                 try {
                     var result = get();
+                    if (result.cancelled()) {
+                        searchAfterWork("최신본 변환을 취소했습니다.     ");
+                        return;
+                    }
                     long notices = result.failed() + result.scanFailures() + result.warnings() + result.indexFailures();
                     showNotices(result.details(),"변환 및 OCR 알림 " + notices + "건");
                     String scanIssues = result.scanFailures()==0 ? "" : " · 탐색 오류 " + result.scanFailures() + "건";
                     String indexIssues = result.indexFailures()==0 ? "" : " · 색인 오류 " + result.indexFailures() + "건";
                     String summary = "변환 " + result.converted() + "건 · 건너뜀 " + result.skipped()
                             + "건 · 실패 " + result.failed() + "건 · 색인 " + result.indexed() + "건"
+                            + " · 대용량 보류 " + result.deferred() + "건 · 이전판 제외 " + result.latestSkipped() + "건"
                             + scanIssues + indexIssues + "     ";
                     searchAfterWork(summary);
                 } catch (Exception e) {

@@ -9,15 +9,20 @@ import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 final class BatchConversion {
-    enum Phase { SCANNING, CONVERTING }
+    enum Phase { SCANNING, PREVIEW, CONVERTING, INDEXING }
 
     record Progress(Phase phase, long scanned, long total, long converted, long skipped, long failed, String current,
-                    int workers, long indexed) {
+                    int workers, long indexed, long deferred, long latestSkipped) {
         long processed() { return converted + skipped + failed; }
     }
 
     record Result(long converted, long skipped, long failed, long scanFailures, long warnings, List<String> details,
-                  long indexed, long indexFailures) {}
+                  long indexed, long indexFailures, long deferred, long latestSkipped, boolean cancelled) {}
+
+    @FunctionalInterface
+    interface LatestPreviewConfirmation {
+        boolean confirm(LatestVersionSelection.Preview preview) throws IOException;
+    }
 
     private record Job(String key, Slot slot, String filename) {}
     private record Conversion(Path markdown, String failure, String warning) {}
@@ -32,7 +37,7 @@ final class BatchConversion {
     private final Set<Path> unindexed = new LinkedHashSet<>();
     private Phase phase = Phase.SCANNING;
     private long scanned, total, converted, skipped, failed, scanFailures, warnings;
-    private long indexed, indexFailures, pendingSince, lastUpdate;
+    private long indexed, indexFailures, deferred, latestSkipped, pendingSince, lastUpdate;
     private int workers = 1;
 
     private BatchConversion(Consumer<Progress> progress) {
@@ -41,34 +46,76 @@ final class BatchConversion {
 
     static Result run(List<Path> inputs, Path library, boolean reconvertSameName, ImageOcr.Mode mode,
                       int requestedWorkers, Consumer<Progress> progress) throws IOException {
+        return run(inputs, library, reconvertSameName, mode, requestedWorkers, progress, null);
+    }
+
+    static Result run(List<Path> inputs, Path library, boolean reconvertSameName, ImageOcr.Mode mode,
+                      int requestedWorkers, Consumer<Progress> progress, LatestPreviewConfirmation confirmation) throws IOException {
         var parallelism = new BatchParallelism(mode, requestedWorkers, Runtime.getRuntime().availableProcessors());
-        return new BatchConversion(progress).run(inputs, library, reconvertSameName, mode, parallelism);
+        return new BatchConversion(progress).run(inputs, library, reconvertSameName, mode, parallelism, confirmation);
     }
 
     private Result run(List<Path> inputs, Path library, boolean reconvertSameName, ImageOcr.Mode mode,
-                       BatchParallelism parallelism) throws IOException {
+                       BatchParallelism parallelism, LatestPreviewConfirmation confirmation) throws IOException {
         publish("", true);
-        Files.createDirectories(library);
-        Set<String> seenNames = reconvertSameName ? null : existingNames(library);
         // Keep the inventory on disk so the total is exact without holding every source path in memory.
-        Path inventory = Files.createTempFile(library, ".batch-", ".tmp");
+        Path inventory = Files.createTempFile("office-markdown-batch-", ".tmp");
         try {
+            var versions = confirmation == null ? null : new LatestVersionSelection();
+            boolean folderInput = false;
             try (var paths = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(inventory)))) {
-                for (Path input : inputs) scan(input, paths);
+                for (Path input : inputs) folderInput |= scan(input, paths, versions);
             }
+            long inventoryTotal = total;
+            Set<Path> older = Set.of();
+            if (versions != null && folderInput) {
+                if (versions.hasGroups()) checkUnmarkedFiles(versions, inventory, inventoryTotal);
+                var plan = versions.plan(inventoryTotal);
+                checkInterrupted();
+                phase = Phase.PREVIEW;
+                publish("", true);
+                if (!confirmation.confirm(plan.preview())) return result(true);
+                checkInterrupted();
+                older = plan.skippedPaths();
+                latestSkipped = plan.preview().latestSkipped();
+                total = plan.preview().selected();
+            }
+            Files.createDirectories(library);
+            phase = Phase.SCANNING;
+            Set<String> seenNames = reconvertSameName ? null : existingNames(library);
             phase = Phase.CONVERTING;
             workers = parallelism.observe();
             publish("", true);
-            if (total != 0) convertInventory(inventory, library, seenNames, mode, parallelism);
+            if (total != 0) convertInventory(inventory, inventoryTotal, library, seenNames, older, mode, parallelism);
             publish("", true);
-            return new Result(converted, skipped, failed, scanFailures, warnings, List.copyOf(details), indexed, indexFailures);
+            return result(false);
         } finally {
             Files.deleteIfExists(inventory);
         }
     }
 
-    private void convertInventory(Path inventory, Path library, Set<String> seenNames, ImageOcr.Mode mode,
-                                  BatchParallelism parallelism) throws IOException {
+    private Result result(boolean cancelled) {
+        return new Result(converted, skipped, failed, scanFailures, warnings, List.copyOf(details), indexed, indexFailures,
+                deferred, latestSkipped, cancelled);
+    }
+
+    private void checkUnmarkedFiles(LatestVersionSelection versions, Path inventory, long inventoryTotal) throws IOException {
+        try (var paths = new DataInputStream(new BufferedInputStream(Files.newInputStream(inventory)))) {
+            for (long i = 0; i < inventoryTotal; i++) {
+                checkInterrupted();
+                versions.checkUnmarked(readPath(paths));
+            }
+        }
+    }
+
+    private static Path readPath(DataInputStream paths) throws IOException {
+        byte[] encoded = new byte[paths.readInt()];
+        paths.readFully(encoded);
+        return Path.of(new String(encoded, StandardCharsets.UTF_8));
+    }
+
+    private void convertInventory(Path inventory, long inventoryTotal, Path library, Set<String> seenNames,
+                                  Set<Path> older, ImageOcr.Mode mode, BatchParallelism parallelism) throws IOException {
         Path scripts = mode == ImageOcr.Mode.OFF ? null : ocrScripts();
         try (var slots = new Slots(mode, scripts);
              var executor = Executors.newCachedThreadPool();
@@ -76,14 +123,13 @@ final class BatchConversion {
             var finished = new ExecutorCompletionService<Conversion>(executor);
             var running = new HashMap<Future<Conversion>, Job>();
             try {
-                for (long i = 0; i < total; i++) {
+                for (long i = 0; i < inventoryTotal; i++) {
                     checkInterrupted();
-                    byte[] encoded = new byte[paths.readInt()];
-                    paths.readFully(encoded);
-                    Path path = Path.of(new String(encoded, StandardCharsets.UTF_8));
+                    Path path = readPath(paths);
+                    if (older.contains(path)) continue;
                     String key = seenNames == null ? path.toString().toLowerCase(Locale.ROOT) : filename(path);
                     while (true) {
-                        flushIndex(library, false);
+                        flushIndex(library, false, currentFile(running));
                         if (seenNames != null && seenNames.contains(key)) {
                             skipped++;
                             publish(path.getFileName().toString(), false);
@@ -112,7 +158,7 @@ final class BatchConversion {
                     }
                 } finally {
                     if (Thread.currentThread().isInterrupted()) executor.shutdownNow();
-                    else flushIndex(library, true);
+                    else flushIndex(library, true, "");
                 }
             }
         }
@@ -141,7 +187,7 @@ final class BatchConversion {
                     }
                 }
             }
-            flushIndex(library, false);
+            flushIndex(library, false, currentFile(running));
             publish(currentFile(running), false);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -155,20 +201,26 @@ final class BatchConversion {
         return running.isEmpty() ? "" : running.values().iterator().next().filename();
     }
 
-    private void flushIndex(Path library, boolean force) {
+    private void flushIndex(Path library, boolean force, String convertingFile) {
         if (unindexed.isEmpty()) return;
         if (!force && unindexed.size() < INDEX_BATCH_SIZE && System.nanoTime() - pendingSince < INDEX_INTERVAL_NS) return;
         int count = unindexed.size();
+        phase = Phase.INDEXING;
+        publish(count + "개 문서", true);
         try {
-            int added = SearchIndex.indexCompleted(library, List.copyOf(unindexed));
-            indexed += added;
-            indexFailures += count - added;
-            if (added < count) detail("색인에 추가하지 못한 변환본 " + (count - added) + "건");
+            var completion = SearchIndex.indexCompletedDetailed(library, List.copyOf(unindexed));
+            indexed += completion.indexed();
+            deferred += completion.deferred();
+            int missing = count - completion.indexed() - completion.deferred();
+            indexFailures += missing;
+            if (missing > 0) detail("색인에 추가하지 못한 변환본 " + missing + "건");
         } catch (IOException e) {
             indexFailures += count;
             detail("변환본 " + count + "건 색인 실패\n" + e);
         } finally {
             unindexed.clear();
+            phase = Phase.CONVERTING;
+            publish(convertingFile, true);
         }
     }
 
@@ -180,7 +232,7 @@ final class BatchConversion {
         }
     }
 
-    private void scan(Path input, DataOutputStream paths) throws IOException {
+    private boolean scan(Path input, DataOutputStream paths, LatestVersionSelection versions) throws IOException {
         checkInterrupted();
         Path root;
         try {
@@ -188,13 +240,13 @@ final class BatchConversion {
         } catch (IOException e) {
             scanned++;
             scanFailure(input, e);
-            return;
+            return false;
         }
         boolean directory = Files.isDirectory(root);
         if (!directory && !Library.supported(root)) {
             scanned++;
             scanFailure(root, new IOException("지원하지 않는 파일 형식"));
-            return;
+            return false;
         }
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
@@ -208,6 +260,7 @@ final class BatchConversion {
                     paths.writeInt(encoded.length);
                     paths.write(encoded);
                     total++;
+                    if (versions != null) versions.record(path, directory);
                 }
                 onScanned(path);
                 return FileVisitResult.CONTINUE;
@@ -216,14 +269,19 @@ final class BatchConversion {
             @Override public FileVisitResult visitFileFailed(Path path, IOException error) throws IOException {
                 onScanned(path);
                 scanFailure(path, error);
+                if (versions != null && directory && Library.supported(path)) versions.markIncomplete(path.getParent());
                 return FileVisitResult.CONTINUE;
             }
 
             @Override public FileVisitResult postVisitDirectory(Path dir, IOException error) {
-                if (error != null) scanFailure(dir, error);
+                if (error != null) {
+                    scanFailure(dir, error);
+                    if (versions != null) versions.markIncomplete(dir);
+                }
                 return FileVisitResult.CONTINUE;
             }
         });
+        return directory;
     }
 
     private void onScanned(Path path) throws InterruptedIOException {
@@ -285,7 +343,8 @@ final class BatchConversion {
         long now = System.nanoTime();
         if (!force && now - lastUpdate < UPDATE_INTERVAL_NS) return;
         lastUpdate = now;
-        progress.accept(new Progress(phase, scanned, total, converted, skipped, failed, current, workers, indexed));
+        progress.accept(new Progress(phase, scanned, total, converted, skipped, failed, current, workers, indexed, deferred,
+                latestSkipped));
     }
 
     private static String filename(Path path) {

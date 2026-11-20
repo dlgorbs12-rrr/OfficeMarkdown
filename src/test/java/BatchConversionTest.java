@@ -64,6 +64,62 @@ class BatchConversionTest {
         assertEquals(4, progress.getLast().processed());
         assertEquals(4, progress.getLast().total());
         assertEquals(2, progress.getLast().indexed());
+        assertTrue(progress.stream().anyMatch(update -> update.phase() == BatchConversion.Phase.INDEXING));
+    }
+
+    @Test void folderPreviewControlsExactlyWhichFilesAreConverted() throws Exception {
+        Path source = root.resolve("source");
+        Path library = root.resolve("library");
+        Path oldest = workbook(source.resolve("프로젝트 신규 투입자 매뉴얼_ver0.9.xlsx")).toRealPath();
+        Path older = workbook(source.resolve("프로젝트 신규 투입자 매뉴얼_ver1.1.xlsx")).toRealPath();
+        Path latest = workbook(source.resolve("프로젝트 신규 투입자 매뉴얼_ver1.10.xlsx")).toRealPath();
+        Path nested = workbook(source.resolve("다른 폴더/프로젝트 신규 투입자 매뉴얼_ver0.1.xlsx")).toRealPath();
+        var progress = new ArrayList<BatchConversion.Progress>();
+
+        var result = BatchConversion.run(List.of(source, older), library, true, ImageOcr.Mode.OFF, 1, progress::add, preview -> {
+            assertFalse(Files.exists(library));
+            assertEquals(BatchConversion.Phase.PREVIEW, progress.getLast().phase());
+            assertEquals(5, preview.discovered());
+            assertEquals(1, preview.latestSkipped());
+            assertEquals(4, preview.selected());
+            assertEquals(List.of(new LatestVersionSelection.Choice(latest, List.of(oldest))), preview.choices());
+            return true;
+        });
+
+        assertFalse(result.cancelled());
+        assertEquals(1, result.latestSkipped());
+        assertEquals(4, result.converted());
+        assertEquals(4, progress.getLast().total());
+        assertEquals(4, progress.getLast().processed());
+        assertTrue(Files.exists(oldest));
+        var summaries = SearchIndex.searchCached(library, "", SearchIndex.Scope.ALL, SearchIndex.Mode.PHRASE, 10);
+        assertTrue(summaries.stream().anyMatch(note -> note.source().equals(latest)));
+        assertTrue(summaries.stream().anyMatch(note -> note.source().equals(older)));
+        assertTrue(summaries.stream().anyMatch(note -> note.source().equals(nested)));
+        assertFalse(summaries.stream().anyMatch(note -> note.source().equals(oldest)));
+    }
+
+    @Test void refusingFolderPreviewLeavesLibraryAndOriginalsUntouched() throws Exception {
+        Path old = workbook(root.resolve("source/보고서_v1.xlsx"));
+        Path current = workbook(root.resolve("source/보고서_v2.xlsx"));
+        Path library = root.resolve("library");
+        var progress = new ArrayList<BatchConversion.Progress>();
+        byte[] before = Files.readAllBytes(old);
+
+        var result = BatchConversion.run(List.of(old.getParent()), library, true, ImageOcr.Mode.OFF, 1, progress::add,
+                preview -> {
+                    assertEquals(1, preview.latestSkipped());
+                    return false;
+                });
+
+        assertTrue(result.cancelled());
+        assertEquals(0, result.converted());
+        assertEquals(0, result.latestSkipped());
+        assertEquals(0, result.indexed());
+        assertEquals(BatchConversion.Phase.PREVIEW, progress.getLast().phase());
+        assertFalse(Files.exists(library));
+        assertArrayEquals(before, Files.readAllBytes(old));
+        assertTrue(Files.exists(current));
     }
 
     private static Path workbook(Path target) throws Exception {

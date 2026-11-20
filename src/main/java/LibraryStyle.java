@@ -74,9 +74,16 @@ final class LibraryStyle {
             row.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createMatteBorder(0,selected?3:0,1,0,selected?PURPLE:LINE),
                     new EmptyBorder(9,selected?9:12,9,10)));
-            boolean excel = hit.source().getFileName().toString().toLowerCase(java.util.Locale.ROOT).matches(".*\\.xlsx?");
             Icon thumbnail = thumbnails.apply(hit);
-            if (thumbnail == null) thumbnail = document(excel?"X":"P",38,excel?new Color(0x24765D):new Color(0xB95331));
+            if (thumbnail == null) {
+                String name = hit.source().getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                thumbnail = switch (name.substring(name.lastIndexOf('.') + 1)) {
+                    case "xls", "xlsx" -> document("X", 38, new Color(0x24765D));
+                    case "doc", "docx" -> document("W", 38, new Color(0x315B99));
+                    case "pdf" -> document("F", 38, new Color(0xA22D35));
+                    default -> document("P", 38, new Color(0xB95331));
+                };
+            }
             row.add(new JLabel(thumbnail),BorderLayout.WEST);
             JPanel text = panel(new GridLayout(2,1),0);
             text.add(label(hit.title(),14,true,INK));

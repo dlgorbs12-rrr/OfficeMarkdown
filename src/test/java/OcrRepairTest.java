@@ -61,6 +61,21 @@ class OcrRepairTest {
         }
     }
 
+    @Test void preservesExistingLineEndingsAndFinalBodyText() throws Exception {
+        var fixture = fixture("깨짐 �");
+        String original = Files.readString(fixture.note).replace("\n", "\r\n") + "마지막 업무 문장";
+        Files.writeString(fixture.note, original);
+        String generation = original.lines().map(PictureAssets::generation).filter(Objects::nonNull)
+                .findFirst().orElseThrow();
+
+        assertEquals(1, OcrRepair.repair(fixture.library, OcrRepair.find(fixture.library, 10),
+                (data, image) -> "새로 인식한 문장"));
+        String updated = Files.readString(fixture.note);
+        String updatedGeneration = updated.lines().map(PictureAssets::generation).filter(Objects::nonNull)
+                .findFirst().orElseThrow();
+        assertEquals(original.replace(generation, updatedGeneration).replace("깨짐 �", "새로 인식한 문장"), updated);
+    }
+
     private Path picturePath(Path library, Library.Hit hit) {
         return library.resolve(hit.picture().relativePath());
     }

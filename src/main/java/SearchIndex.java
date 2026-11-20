@@ -14,7 +14,15 @@ final class SearchIndex {
     private static final int INDEX_BATCH = 64;
     private static final int WRITER_WAIT_MS = 60_000;
 
-    record Progress(long checked, long updated, long removed) {}
+    static final long LARGE_BYTES = 100_000_000L;
+    record Progress(long checked, long updated, long removed, long deferred) {}
+    record Completion(int indexed, int deferred) {}
+    record HeldNote(Path path, long size) {
+        @Override public String toString() {
+            return "%s  (%.1f MB)".formatted(path.getFileName(), size / 1_000_000.0);
+        }
+    }
+    record LargeSettings(boolean hold, List<HeldNote> pending) {}
 
     enum Mode {
         PHRASE("정확한 문구"), AND("모두 포함 (AND)"), OR("하나 이상 (OR)");
@@ -70,7 +78,7 @@ final class SearchIndex {
         return readIndex(root, db -> {
             String query = """
                 SELECT d.md,d.source,d.title,p.section,p.text,p.path,p.location
-                FROM pictures p JOIN docs d ON d.id=p.doc
+                FROM pictures p JOIN visible_docs d ON d.id=p.doc
                 WHERE p.text<>''
                 ORDER BY p.id
                 """;
@@ -101,6 +109,13 @@ final class SearchIndex {
             try (var tables = sql.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docs'")) {
                 if (!tables.next()) return List.of();
             }
+            // Cached searches also run before an older library has been migrated.
+            boolean hasQueue;
+            try (var tables = sql.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='large_pending'")) {
+                hasQueue = tables.next();
+            }
+            String predicate = hasQueue ? " WHERE NOT EXISTS (SELECT 1 FROM large_pending p WHERE p.md=d.md)" : "";
+            sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.* FROM main.docs d" + predicate);
             return query.run(db);
         } catch (SQLException e) {
             throw new IOException("저장된 검색 색인을 열지 못했습니다. " + e.getMessage(), e);
@@ -112,8 +127,8 @@ final class SearchIndex {
         if (!Files.isDirectory(library)) return;
         checkInterrupted();
         try (var writer = new IndexWriter(library)) {
-            long checked = 0, updated = 0, removed = 0;
-            progress.accept(new Progress(checked, updated, removed));
+            long checked = 0, updated = 0, removed = 0, deferred = 0;
+            progress.accept(new Progress(checked, updated, removed, deferred));
             var paths = new ArrayList<Path>(INDEX_BATCH);
             try (var files = Files.newDirectoryStream(library, SearchIndex::markdown)) {
                 for (Path file : files) {
@@ -124,7 +139,8 @@ final class SearchIndex {
                         checked += paths.size();
                         updated += result.updated();
                         removed += result.removed();
-                        progress.accept(new Progress(checked, updated, removed));
+                        deferred += result.deferred();
+                        progress.accept(new Progress(checked, updated, removed, deferred));
                         paths.clear();
                     }
                 }
@@ -134,7 +150,8 @@ final class SearchIndex {
                 checked += paths.size();
                 updated += result.updated();
                 removed += result.removed();
-                progress.accept(new Progress(checked, updated, removed));
+                deferred += result.deferred();
+                progress.accept(new Progress(checked, updated, removed, deferred));
             }
 
             // Read indexed keys in bounded pages. Recheck absence underneath the writer transaction.
@@ -147,11 +164,11 @@ final class SearchIndex {
                 var missing = new ArrayList<Path>(INDEX_BATCH);
                 for (String path : indexed) {
                     var note = Path.of(path);
-                    if (!library.equals(note.getParent()) || Files.notExists(note)) missing.add(note);
+                    if (!library.equals(note.getParent()) || Files.notExists(note) || Files.isDirectory(note)) missing.add(note);
                 }
                 if (!missing.isEmpty()) {
                     removed += writer.write(missing, true).removed();
-                    progress.accept(new Progress(checked, updated, removed));
+                    progress.accept(new Progress(checked, updated, removed, deferred));
                 }
             }
         } catch (DirectoryIteratorException e) {
@@ -162,11 +179,15 @@ final class SearchIndex {
     }
 
     static int indexCompleted(Path root, List<Path> markdown) throws IOException {
-        if (markdown.isEmpty()) return 0;
+        return indexCompletedDetailed(root, markdown).indexed();
+    }
+
+    static Completion indexCompletedDetailed(Path root, List<Path> markdown) throws IOException {
+        if (markdown.isEmpty()) return new Completion(0, 0);
         Path library = root.toAbsolutePath().normalize();
         checkInterrupted();
         try (var writer = new IndexWriter(library)) {
-            int indexed = 0;
+            int indexed = 0, deferred = 0;
             for (int start = 0; start < markdown.size(); start += INDEX_BATCH) {
                 var paths = new ArrayList<Path>(INDEX_BATCH);
                 for (Path path : markdown.subList(start, Math.min(start + INDEX_BATCH, markdown.size()))) {
@@ -176,12 +197,48 @@ final class SearchIndex {
                         throw new IOException("검색 색인 대상이 Markdown 폴더 안의 문서가 아닙니다.");
                     paths.add(library.resolve(note.getFileName()));
                 }
-                indexed += writer.write(paths, false).indexed();
+                var result = writer.write(paths, false);
+                indexed += result.indexed();
+                deferred += result.deferred();
             }
-            return indexed;
+            return new Completion(indexed, deferred);
         } catch (SQLException e) {
             throw new IOException("완료한 문서의 색인을 갱신하지 못했습니다. " + e.getMessage(), e);
         }
+    }
+
+    static LargeSettings largeSettings(Path root) throws IOException {
+        Path library = root.toAbsolutePath().normalize();
+        if (!Files.isDirectory(library)) return new LargeSettings(true, List.of());
+        try (var writer = new IndexWriter(library)) {
+            var notes = new ArrayList<HeldNote>();
+            try (var rows = writer.sql.executeQuery("SELECT md,size FROM large_pending ORDER BY md")) {
+                while (rows.next()) {
+                    Path path = Path.of(rows.getString(1));
+                    if (library.equals(path.getParent()) && Files.isRegularFile(path))
+                        notes.add(new HeldNote(path, rows.getLong(2)));
+                }
+            }
+            return new LargeSettings(writer.holdLarge(), List.copyOf(notes));
+        } catch (SQLException e) { throw new IOException("대용량 색인 설정 조회 실패", e); }
+    }
+
+    static void configureLarge(Path root, boolean hold, List<Path> allow) throws IOException {
+        Path library = Files.createDirectories(root.toAbsolutePath().normalize());
+        try (var writer = new IndexWriter(library);
+             var setting = writer.db.prepareStatement("INSERT OR REPLACE INTO library_options VALUES('hold_large',?)");
+             var permit = writer.db.prepareStatement("INSERT OR IGNORE INTO large_allowed VALUES(?)")) {
+            writer.sql.execute("BEGIN IMMEDIATE");
+            setting.setInt(1, hold ? 1 : 0);
+            setting.executeUpdate();
+            for (Path file : allow) {
+                Path path = file.toAbsolutePath().normalize();
+                if (!library.equals(path.getParent()) || !markdown(path)) throw new IOException("색인 대상 경로 오류");
+                permit.setString(1, path.toString());
+                permit.executeUpdate();
+            }
+            writer.sql.execute("COMMIT");
+        } catch (SQLException e) { throw new IOException("대용량 색인 설정 저장 실패", e); }
     }
 
     private static boolean markdown(Path path) {
@@ -193,6 +250,9 @@ final class SearchIndex {
     }
 
     private static void schema(Statement sql) throws SQLException {
+        sql.execute("CREATE TABLE IF NOT EXISTS library_options(name TEXT PRIMARY KEY,value INTEGER NOT NULL)");
+        sql.execute("CREATE TABLE IF NOT EXISTS large_allowed(md TEXT PRIMARY KEY)");
+        sql.execute("CREATE TABLE IF NOT EXISTS large_pending(md TEXT PRIMARY KEY,size INTEGER NOT NULL)");
         sql.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, md TEXT UNIQUE, stamp TEXT, source TEXT, title TEXT)");
         sql.execute("CREATE INDEX IF NOT EXISTS doc_title ON docs(title,md)");
         sql.execute("CREATE TABLE IF NOT EXISTS lines(id INTEGER PRIMARY KEY, doc INTEGER REFERENCES docs ON DELETE CASCADE, kind INTEGER, section TEXT, text TEXT, folded TEXT)");
@@ -208,15 +268,16 @@ final class SearchIndex {
         sql.execute("CREATE TRIGGER IF NOT EXISTS picture_terms_del AFTER DELETE ON pictures BEGIN INSERT INTO picture_terms(picture_terms,rowid,folded) VALUES('delete',old.id,old.folded); END");
     }
 
-    private enum Outcome { UNCHANGED, UPDATED, REMOVED, SKIPPED }
+    private enum Outcome { UNCHANGED, UPDATED, REMOVED, SKIPPED, DEFERRED }
 
-    private record BatchResult(int indexed, int updated, int removed) {}
+    private record BatchResult(int indexed, int updated, int removed, int deferred) {}
 
     private static final class IndexWriter implements AutoCloseable {
         private final Connection db;
         private final Statement sql;
         private final Path library;
         private final PreparedStatement lookup;
+        private final PreparedStatement clearPending;
         private final PreparedStatement remove;
         private final PreparedStatement doc;
         private final PreparedStatement line;
@@ -235,6 +296,7 @@ final class SearchIndex {
                 sql.execute("BEGIN IMMEDIATE");
                 schema(sql);
                 sql.execute("COMMIT");
+                clearPending = db.prepareStatement("DELETE FROM large_pending WHERE md=?");
                 lookup = db.prepareStatement("SELECT stamp FROM docs WHERE md=?");
                 remove = db.prepareStatement("DELETE FROM docs WHERE md=?");
                 doc = db.prepareStatement("INSERT INTO docs(md,stamp,source,title) VALUES(?,?,?,?) RETURNING id");
@@ -272,7 +334,7 @@ final class SearchIndex {
 
         List<String> pathsAfter(String after) throws SQLException {
             var paths = new ArrayList<String>(INDEX_BATCH);
-            try (var select = db.prepareStatement("SELECT md FROM docs WHERE md > ? ORDER BY md LIMIT ?")) {
+            try (var select = db.prepareStatement("SELECT md FROM docs WHERE md > ?1 UNION SELECT md FROM large_pending WHERE md > ?1 UNION SELECT md FROM large_allowed WHERE md > ?1 ORDER BY md LIMIT ?2")) {
                 select.setString(1, after);
                 select.setInt(2, INDEX_BATCH);
                 try (var rows = select.executeQuery()) {
@@ -284,27 +346,55 @@ final class SearchIndex {
 
         BatchResult write(List<Path> notes, boolean removeOnly) throws SQLException, IOException {
             checkInterrupted();
-            int indexed = 0, updated = 0, removed = 0;
+            int indexed = 0, updated = 0, removed = 0, deferred = 0;
             sql.execute("BEGIN IMMEDIATE");
             try {
+                boolean hold = holdLarge();
                 for (Path note : notes) {
                     checkInterrupted();
-                    Outcome outcome = removeOnly ? removeMissing(note) : index(note);
+                    Outcome outcome = removeOnly ? removeMissing(note) : index(note, hold);
                     if (outcome == Outcome.UNCHANGED || outcome == Outcome.UPDATED) indexed++;
                     if (outcome == Outcome.UPDATED) updated++;
+                    if (outcome == Outcome.DEFERRED) deferred++;
+                    if (outcome != Outcome.DEFERRED && outcome != Outcome.SKIPPED) clearPending(note);
                     if (outcome == Outcome.REMOVED) removed++;
                 }
                 checkInterrupted();
                 sql.execute("COMMIT");
-                return new BatchResult(indexed, updated, removed);
+                return new BatchResult(indexed, updated, removed, deferred);
             } catch (SQLException | IOException | RuntimeException e) {
                 try { sql.execute("ROLLBACK"); } catch (SQLException rollback) { e.addSuppressed(rollback); }
                 throw e;
             }
         }
 
+        private boolean holdLarge() throws SQLException {
+            try (var rows = sql.executeQuery("SELECT value FROM library_options WHERE name='hold_large'")) {
+                return !rows.next() || rows.getInt(1) != 0;
+            }
+        }
+
+        private boolean allowed(Path file) throws SQLException {
+            try (var query = db.prepareStatement("SELECT 1 FROM large_allowed WHERE md=?")) {
+                query.setString(1, file.toString());
+                try (var row = query.executeQuery()) { return row.next(); }
+            }
+        }
+
+        private void clearPending(Path file) throws SQLException {
+            clearPending.setString(1, file.toString());
+            clearPending.executeUpdate();
+        }
+
         private Outcome removeMissing(Path note) throws SQLException {
-            if (!library.equals(note.getParent()) || Files.notExists(note)) return delete(note);
+            if (!library.equals(note.getParent()) || Files.notExists(note) || Files.isDirectory(note)) {
+                clearPending(note);
+                try (var clear = db.prepareStatement("DELETE FROM large_allowed WHERE md=?")) {
+                    clear.setString(1, note.toString());
+                    clear.executeUpdate();
+                }
+                return delete(note);
+            }
             return Outcome.SKIPPED;
         }
 
@@ -313,10 +403,10 @@ final class SearchIndex {
             return remove.executeUpdate() == 0 ? Outcome.SKIPPED : Outcome.REMOVED;
         }
 
-        private Outcome index(Path file) throws SQLException, IOException {
+        private Outcome index(Path file, boolean hold) throws SQLException, IOException {
             var attrs = attributes(file);
             if (attrs == null) return removeMissing(file);
-            if (!attrs.isRegularFile()) return delete(file);
+            if (!attrs.isRegularFile()) return removeMissing(file);
             String stamp = stamp(attrs);
 
             lookup.setString(1, file.toString());
@@ -328,6 +418,16 @@ final class SearchIndex {
                 }
             }
 
+            if (hold && attrs.size() > LARGE_BYTES && !allowed(file)) {
+                try (var mark = db.prepareStatement("INSERT INTO large_pending VALUES(?,?) ON CONFLICT(md) DO UPDATE SET size=excluded.size WHERE size<>excluded.size")) {
+                    mark.setString(1, file.toString());
+                    mark.setLong(2, attrs.size());
+                    mark.executeUpdate();
+                }
+                return Outcome.DEFERRED;
+            }
+
+            if (attrs.size() <= LARGE_BYTES) clearPending(file);
             // A converter may publish another generation while the body is being read.
             sql.execute("SAVEPOINT document_update");
             Outcome outcome = delete(file);
@@ -460,7 +560,7 @@ final class SearchIndex {
                        substr(e.text,max(1,e.pos-60),min(60,e.pos-1)+length(e.word)+100) ||
                        CASE WHEN length(e.text)>e.pos+length(e.word)+99 THEN '…' ELSE '' END,
                        char(10)||char(10) ORDER BY q.key)
-            FROM evidence e JOIN docs d ON d.id=e.doc JOIN json_each(?) q ON q.value=e.word
+            FROM evidence e JOIN visible_docs d ON d.id=e.doc JOIN json_each(?) q ON q.value=e.word
             WHERE e.choice=1 GROUP BY d.id ORDER BY max(e.n) DESC,d.title,d.md LIMIT ?
             """;
         else sql += """
@@ -473,7 +573,7 @@ final class SearchIndex {
             ), ranked AS (
                 SELECT d.md,d.source,d.title,l.section,l.text,f.score,r.coverage,r.kind,l.id,
                        row_number() OVER(PARTITION BY r.doc ORDER BY r.coverage DESC,r.kind,l.id) AS occurrence
-                FROM rows_found r JOIN docs_found f ON r.doc=f.doc JOIN docs d ON d.id=r.doc JOIN lines l ON l.id=r.id)
+                FROM rows_found r JOIN docs_found f ON r.doc=f.doc JOIN visible_docs d ON d.id=r.doc JOIN lines l ON l.id=r.id)
             SELECT md,source,title,section,text FROM ranked
             ORDER BY score DESC,occurrence,coverage DESC,kind,title,md,id LIMIT ?
             """;
@@ -497,7 +597,7 @@ final class SearchIndex {
 
     private static List<Library.Hit> find(Connection db, String query, Scope scope, int limit) throws SQLException {
         if (query.isEmpty()) {
-            try (var stmt = db.prepareStatement("SELECT md,source,title,'제목',title FROM docs ORDER BY title,md LIMIT ?")) {
+            try (var stmt = db.prepareStatement("SELECT md,source,title,'제목',title FROM visible_docs ORDER BY title,md LIMIT ?")) {
                 stmt.setInt(1, limit);
                 return results(stmt);
             }
@@ -514,7 +614,7 @@ final class SearchIndex {
                 SELECT md,source,title,section,text FROM (
                     SELECT d.md,d.source,d.title,l.section,l.text,l.kind,l.id,
                            row_number() OVER(PARTITION BY l.doc,l.kind ORDER BY l.id) AS occurrence
-                    FROM lines l JOIN docs d ON d.id=l.doc WHERE
+                    FROM lines l JOIN visible_docs d ON d.id=l.doc WHERE
                 """ + filter + (indexed ? " AND l.id IN (SELECT rowid FROM terms WHERE terms MATCH ?)" : "")
                 + " AND instr(l.folded,?)>0) ORDER BY kind,occurrence,title,md,id LIMIT ?";
         try (var stmt = db.prepareStatement(sql)) {
@@ -539,7 +639,7 @@ final class SearchIndex {
                 WHERE length(w.word)<3 AND instr(p.folded,w.word)>0
             ), ranked AS (SELECT id,count(*) AS score FROM matches GROUP BY id HAVING count(*)>=?)
             SELECT d.md,d.source,d.title,p.section,p.text,p.path,p.location
-            FROM ranked r JOIN pictures p ON p.id=r.id JOIN docs d ON d.id=p.doc
+            FROM ranked r JOIN pictures p ON p.id=r.id JOIN visible_docs d ON d.id=p.doc
             ORDER BY r.score DESC,d.title,d.md,p.id LIMIT ?
             """;
         List<Library.Hit> results = new ArrayList<>();

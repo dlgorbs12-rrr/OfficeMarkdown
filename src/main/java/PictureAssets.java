@@ -21,7 +21,22 @@ final class PictureAssets implements AutoCloseable {
     private static final Pattern FILE = Pattern.compile("([1-9][0-9]{0,8})\\.([a-z0-9]{1,8})");
     private static final Pattern DERIVED = Pattern.compile("[1-9][0-9]{0,8}-(preview|thumb)\\.png");
 
-    record Entry(String filename, String section, String location, String text) {}
+    enum OcrState { PENDING, COMPLETE, UNSUPPORTED }
+
+    record Entry(String filename, String section, String location, String text, OcrState state) {
+        Entry(String filename, String section, String location, String text) {
+            this(filename, section, location, text, null);
+        }
+
+        boolean needsOcr() {
+            // Earlier manifests did not distinguish OCR disabled from a successful empty result.
+            return text.isBlank() && (state == null || state == OcrState.PENDING);
+        }
+
+        Entry withOcr(String text, OcrState state) {
+            return new Entry(filename, section, location, text, state);
+        }
+    }
 
     record Reference(String relativePath, String location) {
         String number() { return relativePath.substring(relativePath.lastIndexOf('/') + 1, relativePath.lastIndexOf('.')); }
@@ -65,14 +80,17 @@ final class PictureAssets implements AutoCloseable {
 
         location = location.replaceAll("\\R", " ");
         BufferedImage bitmap = decode(data, type, location);
-        String recognized = bitmap == null || ocr == null ? "" : ocr.text(data, bitmap);
+        OcrState state = OcrState.UNSUPPORTED;
+        String recognized = "";
         if (bitmap != null) {
+            state = ocr == null || !ocr.enabled() ? OcrState.PENDING : OcrState.COMPLETE;
+            if (state == OcrState.COMPLETE) recognized = ocr.text(data, bitmap);
             ImageIO.write(scale(bitmap, 1280, 960), "PNG", directory.resolve(number + "-preview.png").toFile());
             ImageIO.write(scale(bitmap, 72, 48), "PNG", directory.resolve(number + "-thumb.png").toFile());
         }
-        writeEntry(new Entry(filename, section, location, recognized));
+        writeEntry(new Entry(filename, section, location, recognized, state));
         var reference = new Reference(prefix(key, generation) + filename, location);
-        out.write("\n" + markdownLine(reference) + "\n그림 " + number + " · " + location + "\n\n");
+        out.write("\n" + markdownLine(reference) + "\n" + caption(reference) + "\n\n");
         out.write(ocrBlock(location, recognized));
     }
 
@@ -91,10 +109,11 @@ final class PictureAssets implements AutoCloseable {
 
     String header() { return HEADER + generation + " -->"; }
 
-    void stageRepair(String previous, List<Entry> entries) throws IOException {
+    void stageOcrUpdate(String previous, List<Entry> entries) throws IOException {
         openManifest();
         String previousPrefix = prefix(key, previous);
         for (var entry : entries) {
+            SavedPictureDocument.checkInterrupted();
             Path original = pictureFile(target, new Reference(previousPrefix + entry.filename(), entry.location()));
             if (original == null) throw new IOException("저장된 그림을 찾을 수 없습니다.");
             copyImage(original, entry.filename());
@@ -144,15 +163,20 @@ final class PictureAssets implements AutoCloseable {
         return "![그림 " + reference.number() + "](" + reference.relativePath() + ")";
     }
 
+    static String caption(Reference reference) {
+        return "그림 " + reference.number() + " · " + reference.location();
+    }
+
     void publish(Path markdown) throws IOException {
-        publish(markdown, null, null);
+        publish(markdown, null, null, null);
     }
 
-    void publishRepair(Path markdown, String previous, BasicFileAttributes expected) throws IOException {
-        publish(markdown, previous, expected);
+    void publishOcrUpdate(Path markdown, String previous, BasicFileAttributes expected, String expectedManifest) throws IOException {
+        publish(markdown, previous, expected, expectedManifest);
     }
 
-    private void publish(Path markdown, String expectedGeneration, BasicFileAttributes expected) throws IOException {
+    private void publish(Path markdown, String expectedGeneration, BasicFileAttributes expected, String expectedManifest)
+            throws IOException {
         if (manifest != null) {
             manifest.close();
             manifest = null;
@@ -161,7 +185,7 @@ final class PictureAssets implements AutoCloseable {
         // Coordinate only publication. Each converter writes a unique generation before taking the lock.
         synchronized (PictureAssets.class) {
             if (!Files.exists(assets, LinkOption.NOFOLLOW_LINKS)) {
-                if (expected != null) throw new IOException("변환본이 바뀌었습니다. 깨짐 목록을 다시 확인하세요.");
+                if (expected != null) throw SavedPictureDocument.stale();
                 replace(markdown, target);
                 published = true;
                 return;
@@ -175,10 +199,14 @@ final class PictureAssets implements AutoCloseable {
                     var current = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
                     if (!Objects.equals(previous, expectedGeneration) || !current.isRegularFile()
                             || current.size() != expected.size() || !current.lastModifiedTime().equals(expected.lastModifiedTime())
-                            || !Objects.equals(current.fileKey(), expected.fileKey()))
-                        throw new IOException("변환본이 바뀌었습니다. 깨짐 목록을 다시 확인하세요.");
+                            || !Objects.equals(current.fileKey(), expected.fileKey())
+                            || !manifestStamp(target, previous).equals(expectedManifest))
+                        throw SavedPictureDocument.stale();
+                    SavedPictureDocument.checkInterrupted();
+                    Files.move(markdown, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    replace(markdown, target);
                 }
-                replace(markdown, target);
                 published = true;
                 if (previous != null) {
                     try { deleteGeneration(target.getParent().resolve(prefix(key, previous))); }
@@ -192,12 +220,17 @@ final class PictureAssets implements AutoCloseable {
 
     private String previousGeneration() {
         if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) return null;
-        try (var in = Files.newBufferedReader(target)) {
+        try { return currentGeneration(target); }
+        catch (IOException ignored) { return null; /* A conversion can replace an unreadable old note. */ }
+    }
+
+    static String currentGeneration(Path note) throws IOException {
+        try (var in = Files.newBufferedReader(note)) {
             for (int line = 0; line < 7; line++) {
                 String generation = generation(in.readLine());
                 if (generation != null) return generation;
             }
-        } catch (IOException ignored) { /* A conversion can replace an unreadable old note. */ }
+        }
         return null;
     }
 
@@ -220,7 +253,8 @@ final class PictureAssets implements AutoCloseable {
         try (var files = Files.newDirectoryStream(path)) {
             for (Path file : files) {
                 String name = file.getFileName().toString();
-                if (name.equals(MANIFEST) || FILE.matcher(name).matches() || DERIVED.matcher(name).matches())
+                if (name.equals(MANIFEST) || FILE.matcher(name).matches() || DERIVED.matcher(name).matches()
+                        || OcrCheckpoints.filename(name))
                     if (!Files.isDirectory(file, LinkOption.NOFOLLOW_LINKS)) Files.deleteIfExists(file);
             }
         }
@@ -253,12 +287,15 @@ final class PictureAssets implements AutoCloseable {
     static String manifestStamp(Path markdown, String generation) {
         try {
             Path file = manifestFile(markdown, generation);
-            if (file != null) {
-                var attrs = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-                return attrs.lastModifiedTime() + "/" + attrs.creationTime() + "/" + attrs.size() + "/" + attrs.fileKey();
-            }
+            if (file != null) return fileStamp(file);
         } catch (IOException ignored) { /* The manifest is unavailable. */ }
         return "";
+    }
+
+    static String fileStamp(Path file) throws IOException {
+        var attrs = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!attrs.isRegularFile()) throw SavedPictureDocument.stale();
+        return attrs.lastModifiedTime() + "/" + attrs.creationTime() + "/" + attrs.size() + "/" + attrs.fileKey();
     }
 
     static List<Entry> entries(Path markdown, String generation) {

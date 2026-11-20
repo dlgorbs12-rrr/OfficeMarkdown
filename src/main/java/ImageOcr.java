@@ -31,6 +31,10 @@ final class ImageOcr implements AutoCloseable {
 
     ImageOcr(Mode mode, Path tools) { this.mode=mode; this.tools=tools; }
 
+    boolean enabled() { return mode != Mode.OFF; }
+
+    Mode mode() { return mode; }
+
     static Path scripts() throws Exception {
         Path jar=Path.of(ImageOcr.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         Path packaged=jar.resolveSibling("ocr");
