@@ -10,7 +10,8 @@ import javax.imageio.ImageIO;
 
 final class ImageOcr implements AutoCloseable {
     enum Mode {
-        WINDOWS("Windows OCR · 로컬"), VISION("MarkItDown · 비전 API"), OFF("끄기");
+        WINDOWS("Windows OCR · 로컬"), PADDLE("PaddleOCR · 한글 정밀 · 로컬"),
+        VISION("MarkItDown · 비전 API"), OFF("끄기");
         final String label;
         Mode(String label) { this.label=label; }
         public String toString() { return label; }
@@ -40,37 +41,43 @@ final class ImageOcr implements AutoCloseable {
         return Path.of(System.getenv("LOCALAPPDATA"),"OfficeMarkdown","vision-env","Scripts","python.exe");
     }
 
+    private static Path paddlePath(String name) throws IOException {
+        String value = System.getenv().getOrDefault(name, "").strip();
+        if (value.isEmpty()) throw new IOException("한글 정밀 OCR을 먼저 설치하고 run-local.cmd로 실행하세요. 필요한 설정: " + name);
+        try { return Path.of(value); }
+        catch (InvalidPathException e) { throw new IOException("한글 정밀 OCR 경로 설정이 올바르지 않습니다: " + name, e); }
+    }
+
     static void validate(Mode mode) throws IOException {
+        if (mode == Mode.PADDLE) {
+            Path python = paddlePath("OFFICEMD_PADDLE_PYTHON");
+            Path models = paddlePath("OFFICEMD_PADDLE_MODELS");
+            if (!Files.isRegularFile(python)
+                    || !Files.isDirectory(models.resolve("PP-OCRv5_mobile_det_infer"))
+                    || !Files.isDirectory(models.resolve("korean_PP-OCRv5_mobile_rec_infer")))
+                throw new IOException("한글 정밀 OCR의 Python 또는 한국어 모델을 찾을 수 없습니다. ocr/install-paddle.ps1로 설치하세요.");
+        }
         if (mode==Mode.VISION && (!Files.isRegularFile(python()) ||
                 System.getenv().getOrDefault("OPENAI_API_KEY","").isBlank() ||
                 System.getenv().getOrDefault("OFFICEMD_VISION_MODEL","").isBlank()))
             throw new IOException("비전 OCR에는 Python 플러그인과 OPENAI_API_KEY, OFFICEMD_VISION_MODEL 설정이 필요합니다. 로컬 OCR은 Windows OCR을 선택하세요.");
     }
 
-    void write(byte[] data, String hint, String location, Writer out) throws IOException {
-        if (mode==Mode.OFF) return;
+    String text(byte[] data, BufferedImage image) throws IOException {
+        if (mode==Mode.OFF) return "";
         String key;
         try { key=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data)); }
         catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
         String value=cache.get(key);
         if (value==null) {
-            String type=OfficePicture.type(data,hint);
-            BufferedImage image;
-            try {
-                image=OfficePicture.decode(data,type);
-            } catch(IOException | RuntimeException e) {
-                warnings.add(location+" · "+type+" 그림 해석 실패 ("+e.getClass().getSimpleName()+")");
-                return;
-            }
-            if (image==null) {
-                warnings.add(location+" · 지원하지 않는 그림 형식: "+type);
-                return;
-            }
             try { value=recognize(image); }
-            catch(IOException e) { close(); throw e; }
+            catch(IOException e) {
+                try { close(); } catch(IOException cleanup) { e.addSuppressed(cleanup); }
+                throw e;
+            }
             cache.put(key,value);
         }
-        if (!value.isBlank()) out.write("\n그림 OCR · "+Library.plain(location)+"\n\n"+Library.plain(value)+"\n\n");
+        return value;
     }
 
     private String recognize(BufferedImage image) throws IOException {
@@ -109,12 +116,17 @@ final class ImageOcr implements AutoCloseable {
 
     private void ensureWorker() throws IOException {
         if(worker!=null && worker.isAlive()) return;
+        validate(mode);
         close();
         work=Files.createTempDirectory("office-ocr-");
-        List<String> command = mode==Mode.VISION
-                ? List.of(python().toString(),"-I",tools.resolve("vision-ocr.py").toString(),"--worker")
-                : List.of(Path.of(System.getenv("SystemRoot"),"System32","WindowsPowerShell","v1.0","powershell.exe").toString(),
+        List<String> command = switch (mode) {
+            case VISION -> List.of(python().toString(),"-I",tools.resolve("vision-ocr.py").toString(),"--worker");
+            case PADDLE -> List.of(paddlePath("OFFICEMD_PADDLE_PYTHON").toString(),"-I",
+                    tools.resolve("paddle-ocr.py").toString(),"--worker");
+            case WINDOWS -> List.of(Path.of(System.getenv("SystemRoot"),"System32","WindowsPowerShell","v1.0","powershell.exe").toString(),
                     "-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",tools.resolve("windows-ocr.ps1").toString(),"-Worker");
+            case OFF -> throw new IllegalStateException("OCR 꺼짐 상태에서는 작업 프로세스를 시작할 수 없습니다.");
+        };
         worker=new ProcessBuilder(command).start();
         var errors=worker.errorReader(StandardCharsets.UTF_8);
         diagnostics=new FutureTask<>(() -> {

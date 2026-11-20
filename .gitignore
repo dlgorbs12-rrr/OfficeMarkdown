@@ -1,6 +1,7 @@
 /dist/
 /target/
 /release/
+/local/
 .idea/
 .vscode/
 *.iml

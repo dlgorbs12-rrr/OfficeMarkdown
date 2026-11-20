@@ -2,8 +2,8 @@
 
 ## 처음 설치할 때
 
-1. 저장소에 접근할 수 있는 GitHub 계정으로 로그인하고 [Releases](https://github.com/dlgorbs12-rrr/OfficeMarkdown/releases/latest)를 엽니다.
-2. Assets에서 `OfficeMarkdown-2.4.0.msi` 또는 최신 버전의 MSI를 내려받습니다. 같은 이름의 `.sha256` 파일에 배포자가 올린 해시가 있습니다. PowerShell에서 `Get-FileHash .\OfficeMarkdown-2.4.0.msi -Algorithm SHA256`로 비교할 수 있습니다.
+1. 저장소에 접근할 수 있는 GitHub 계정으로 로그인하고 이 저장소의 **Releases**를 엽니다.
+2. Assets에서 `OfficeMarkdown-2.5.0.msi` 또는 최신 버전의 MSI를 내려받습니다. 같은 이름의 `.sha256` 파일에 배포자가 올린 해시가 있습니다. PowerShell에서 `Get-FileHash .\OfficeMarkdown-2.5.0.msi -Algorithm SHA256`로 비교할 수 있습니다.
 3. MSI를 실행해 현재 Windows 사용자 계정에 설치합니다. 시작 메뉴의 **OfficeMarkdown**으로 실행합니다.
 4. **파일 추가**로 PPT나 Excel 파일을 변환한 뒤, 문서 제목 일부로 검색합니다. 원본 열기에는 해당 파일 형식과 연결된 Windows 앱이 필요합니다.
 

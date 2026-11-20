@@ -4,8 +4,18 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import org.sqlite.SQLiteConfig;
+import org.sqlite.SQLiteErrorCode;
 
 final class SearchIndex {
+    private static final String DATABASE = ".office-index-v1.sqlite";
+    private static final int INDEX_BATCH = 64;
+    private static final int WRITER_WAIT_MS = 60_000;
+
+    record Progress(long checked, long updated, long removed) {}
+
     enum Mode {
         PHRASE("정확한 문구"), AND("모두 포함 (AND)"), OR("하나 이상 (OR)");
         private final String label;
@@ -18,7 +28,7 @@ final class SearchIndex {
         }
     }
     enum Scope {
-        ALL("전체"), TITLE("제목"), CONTENT("내용");
+        ALL("전체"), TITLE("제목"), CONTENT("내용"), IMAGE("그림 OCR");
         private final String label;
         Scope(String label) { this.label = label; }
         public String toString() { return label; }
@@ -35,79 +45,384 @@ final class SearchIndex {
 
     static List<Library.Hit> search(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
-        Path library = root.toAbsolutePath().normalize();
-        if (!Files.isDirectory(library)) return List.of();
-        try (Connection db = DriverManager.getConnection("jdbc:sqlite:" + library.resolve(".office-index-v1.sqlite"));
-             Statement sql = db.createStatement()) {
-            sql.execute("PRAGMA busy_timeout=60000");
-            sql.execute("PRAGMA foreign_keys=ON");
-            sql.execute("BEGIN IMMEDIATE");
-            schema(sql);
-            sync(db, library);
-            sql.execute("COMMIT");
+        synchronize(root, ignored -> {});
+        return searchCached(root, query, scope, mode, limit);
+    }
+
+    static List<Library.Hit> searchCached(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
+        if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
+        return readIndex(root, db -> {
             var words = mode.words(query);
+            if (scope == Scope.IMAGE) return findPictures(db, words, mode, limit);
             if (words.size() <= 1) return find(db, words.isEmpty() ? "" : words.getFirst(), scope, limit);
             return findWords(db, words, scope, mode, limit);
+        });
+    }
+
+    static List<Library.Hit> suspectedOcr(Path root, int limit) throws IOException {
+        if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
+        synchronize(root, ignored -> {});
+        return suspectedOcrCached(root, limit);
+    }
+
+    static List<Library.Hit> suspectedOcrCached(Path root, int limit) throws IOException {
+        if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
+        return readIndex(root, db -> {
+            String query = """
+                SELECT d.md,d.source,d.title,p.section,p.text,p.path,p.location
+                FROM pictures p JOIN docs d ON d.id=p.doc
+                WHERE p.text<>''
+                ORDER BY p.id
+                """;
+            List<Library.Hit> hits = new ArrayList<>();
+            try (var stmt = db.createStatement(); var rs = stmt.executeQuery(query)) {
+                while (hits.size() < limit && rs.next()) {
+                    if (OcrRepair.suspected(rs.getString(5))) hits.add(pictureHit(rs));
+                }
+            }
+            return hits;
+        });
+    }
+
+    @FunctionalInterface
+    private interface Query {
+        List<Library.Hit> run(Connection db) throws SQLException;
+    }
+
+    private static List<Library.Hit> readIndex(Path root, Query query) throws IOException {
+        Path database = root.toAbsolutePath().normalize().resolve(DATABASE);
+        if (!Files.isRegularFile(database)) return List.of();
+        var config = new SQLiteConfig();
+        config.setReadOnly(true);
+        config.setBusyTimeout(1_500);
+        try (Connection db = DriverManager.getConnection("jdbc:sqlite:" + database, config.toProperties());
+             Statement sql = db.createStatement()) {
+            // Opening can race with creation of a brand-new index. Its schema is published in one transaction.
+            try (var tables = sql.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docs'")) {
+                if (!tables.next()) return List.of();
+            }
+            return query.run(db);
         } catch (SQLException e) {
-            throw new IOException("검색 색인을 열거나 갱신하지 못했습니다. " + e.getMessage(), e);
+            throw new IOException("저장된 검색 색인을 열지 못했습니다. " + e.getMessage(), e);
         }
+    }
+
+    static void synchronize(Path root, Consumer<Progress> progress) throws IOException {
+        Path library = root.toAbsolutePath().normalize();
+        if (!Files.isDirectory(library)) return;
+        checkInterrupted();
+        try (var writer = new IndexWriter(library)) {
+            long checked = 0, updated = 0, removed = 0;
+            progress.accept(new Progress(checked, updated, removed));
+            var paths = new ArrayList<Path>(INDEX_BATCH);
+            try (var files = Files.newDirectoryStream(library, SearchIndex::markdown)) {
+                for (Path file : files) {
+                    checkInterrupted();
+                    paths.add(file);
+                    if (paths.size() == INDEX_BATCH) {
+                        var result = writer.write(paths, false);
+                        checked += paths.size();
+                        updated += result.updated();
+                        removed += result.removed();
+                        progress.accept(new Progress(checked, updated, removed));
+                        paths.clear();
+                    }
+                }
+            }
+            if (!paths.isEmpty()) {
+                var result = writer.write(paths, false);
+                checked += paths.size();
+                updated += result.updated();
+                removed += result.removed();
+                progress.accept(new Progress(checked, updated, removed));
+            }
+
+            // Read indexed keys in bounded pages. Recheck absence underneath the writer transaction.
+            String after = "";
+            for (;;) {
+                checkInterrupted();
+                var indexed = writer.pathsAfter(after);
+                if (indexed.isEmpty()) break;
+                after = indexed.getLast();
+                var missing = new ArrayList<Path>(INDEX_BATCH);
+                for (String path : indexed) {
+                    var note = Path.of(path);
+                    if (!library.equals(note.getParent()) || Files.notExists(note)) missing.add(note);
+                }
+                if (!missing.isEmpty()) {
+                    removed += writer.write(missing, true).removed();
+                    progress.accept(new Progress(checked, updated, removed));
+                }
+            }
+        } catch (DirectoryIteratorException e) {
+            throw e.getCause();
+        } catch (SQLException e) {
+            throw new IOException("검색 색인을 갱신하지 못했습니다. " + e.getMessage(), e);
+        }
+    }
+
+    static int indexCompleted(Path root, List<Path> markdown) throws IOException {
+        if (markdown.isEmpty()) return 0;
+        Path library = root.toAbsolutePath().normalize();
+        checkInterrupted();
+        try (var writer = new IndexWriter(library)) {
+            int indexed = 0;
+            for (int start = 0; start < markdown.size(); start += INDEX_BATCH) {
+                var paths = new ArrayList<Path>(INDEX_BATCH);
+                for (Path path : markdown.subList(start, Math.min(start + INDEX_BATCH, markdown.size()))) {
+                    Path note = path.toAbsolutePath().normalize();
+                    if (note.getParent() == null || !markdown(note)
+                            || (!library.equals(note.getParent()) && !Files.isSameFile(library, note.getParent())))
+                        throw new IOException("검색 색인 대상이 Markdown 폴더 안의 문서가 아닙니다.");
+                    paths.add(library.resolve(note.getFileName()));
+                }
+                indexed += writer.write(paths, false).indexed();
+            }
+            return indexed;
+        } catch (SQLException e) {
+            throw new IOException("완료한 문서의 색인을 갱신하지 못했습니다. " + e.getMessage(), e);
+        }
+    }
+
+    private static boolean markdown(Path path) {
+        return path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".md");
+    }
+
+    private static void checkInterrupted() throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("색인 갱신을 중단했습니다.");
     }
 
     private static void schema(Statement sql) throws SQLException {
         sql.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, md TEXT UNIQUE, stamp TEXT, source TEXT, title TEXT)");
+        sql.execute("CREATE INDEX IF NOT EXISTS doc_title ON docs(title,md)");
         sql.execute("CREATE TABLE IF NOT EXISTS lines(id INTEGER PRIMARY KEY, doc INTEGER REFERENCES docs ON DELETE CASCADE, kind INTEGER, section TEXT, text TEXT, folded TEXT)");
         sql.execute("CREATE INDEX IF NOT EXISTS doc_lines ON lines(doc)");
         sql.execute("CREATE VIRTUAL TABLE IF NOT EXISTS terms USING fts5(folded,content='lines',content_rowid='id',tokenize='trigram')");
         sql.execute("CREATE TRIGGER IF NOT EXISTS terms_add AFTER INSERT ON lines BEGIN INSERT INTO terms(rowid,folded) VALUES(new.id,new.folded); END");
         sql.execute("CREATE TRIGGER IF NOT EXISTS terms_del AFTER DELETE ON lines BEGIN INSERT INTO terms(terms,rowid,folded) VALUES('delete',old.id,old.folded); END");
+        sql.execute("CREATE TABLE IF NOT EXISTS pictures(id INTEGER PRIMARY KEY, doc INTEGER REFERENCES docs ON DELETE CASCADE,"
+                + " path TEXT, location TEXT, section TEXT, text TEXT, folded TEXT)");
+        sql.execute("CREATE INDEX IF NOT EXISTS doc_pictures ON pictures(doc)");
+        sql.execute("CREATE VIRTUAL TABLE IF NOT EXISTS picture_terms USING fts5(folded,content='pictures',content_rowid='id',tokenize='trigram')");
+        sql.execute("CREATE TRIGGER IF NOT EXISTS picture_terms_add AFTER INSERT ON pictures BEGIN INSERT INTO picture_terms(rowid,folded) VALUES(new.id,new.folded); END");
+        sql.execute("CREATE TRIGGER IF NOT EXISTS picture_terms_del AFTER DELETE ON pictures BEGIN INSERT INTO picture_terms(picture_terms,rowid,folded) VALUES('delete',old.id,old.folded); END");
     }
 
-    private static void sync(Connection db, Path library) throws SQLException, IOException {
-        Map<String,String> existing = new HashMap<>();
-        try (Statement stmt = db.createStatement(); ResultSet rs = stmt.executeQuery("SELECT md,stamp FROM docs")) {
-            while (rs.next()) existing.put(rs.getString(1), rs.getString(2));
+    private enum Outcome { UNCHANGED, UPDATED, REMOVED, SKIPPED }
+
+    private record BatchResult(int indexed, int updated, int removed) {}
+
+    private static final class IndexWriter implements AutoCloseable {
+        private final Connection db;
+        private final Statement sql;
+        private final Path library;
+        private final PreparedStatement lookup;
+        private final PreparedStatement remove;
+        private final PreparedStatement doc;
+        private final PreparedStatement line;
+        private final PreparedStatement picture;
+
+        IndexWriter(Path library) throws SQLException, IOException {
+            this.library = library;
+            // indexCompleted receives files already published by a conversion.
+            if (!Files.isDirectory(library)) throw new NoSuchFileException(library.toString());
+            db = DriverManager.getConnection("jdbc:sqlite:" + library.resolve(DATABASE));
+            try {
+                sql = db.createStatement();
+                sql.execute("PRAGMA busy_timeout=" + WRITER_WAIT_MS);
+                sql.execute("PRAGMA foreign_keys=ON");
+                enableWal(sql);
+                sql.execute("BEGIN IMMEDIATE");
+                schema(sql);
+                sql.execute("COMMIT");
+                lookup = db.prepareStatement("SELECT stamp FROM docs WHERE md=?");
+                remove = db.prepareStatement("DELETE FROM docs WHERE md=?");
+                doc = db.prepareStatement("INSERT INTO docs(md,stamp,source,title) VALUES(?,?,?,?) RETURNING id");
+                line = db.prepareStatement("INSERT INTO lines(doc,kind,section,text,folded) VALUES(?,?,?,?,?)");
+                picture = db.prepareStatement("INSERT INTO pictures(doc,path,location,section,text,folded) VALUES(?,?,?,?,?,?)");
+            } catch (SQLException | IOException | RuntimeException e) {
+                try { db.close(); } catch (SQLException close) { e.addSuppressed(close); }
+                throw e;
+            }
         }
-        try (var files = Files.newDirectoryStream(library, p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".md"));
-             var remove = db.prepareStatement("DELETE FROM docs WHERE md=?");
-             var doc = db.prepareStatement("INSERT INTO docs(md,stamp,source,title) VALUES(?,?,?,?) RETURNING id");
-             var line = db.prepareStatement("INSERT INTO lines(doc,kind,section,text,folded) VALUES(?,?,?,?,?)")) {
-            for (Path file : files) {
-                var attrs = Files.readAttributes(file, BasicFileAttributes.class);
-                if (!attrs.isRegularFile()) continue;
-                String name = file.toString();
-                String stamp = attrs.lastModifiedTime() + "/" + attrs.size() + "/" + attrs.fileKey();
-                if (stamp.equals(existing.remove(name))) continue;
-                remove.setString(1, name); remove.executeUpdate();
-                try (var in = Files.newBufferedReader(file)) {
-                    String heading = in.readLine();
-                    in.readLine();
-                    String link = in.readLine(), prefix = "[원본 파일 열기](<";
-                    if (heading == null || !heading.startsWith("# ") || link == null ||
-                            !link.startsWith(prefix) || !link.endsWith(">)")) continue;
-                    Path source;
-                    try { source = Path.of(URI.create(link.substring(prefix.length(), link.length()-2))); }
-                    catch (IllegalArgumentException | FileSystemNotFoundException e) { continue; }
-                    if (!Library.supported(source)) continue;
-                    String title = heading.substring(2);
-                    doc.setString(1,name); doc.setString(2,stamp); doc.setString(3,source.toString()); doc.setString(4,title);
-                    long id;
-                    try (var rs = doc.executeQuery()) { rs.next(); id = rs.getLong(1); }
-                    add(line,id,0,"제목",title);
-                    add(line,id,1,"원본 경로",source.toString());
-                    String section = "", value;
-                    while ((value = in.readLine()) != null) {
-                        if (value.startsWith("## ")) section = value.substring(3);
-                        if (section.isEmpty() || value.isBlank()) continue;
-                        if (value.startsWith("| ")) value = value.replace("<br>", " ")
-                                .replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-                                .replace("\\|", "|").replace("\\\\", "\\");
-                        add(line,id,2,section,value);
+
+        private static void enableWal(Statement sql) throws SQLException, IOException {
+            long start = System.nanoTime();
+            for (;;) {
+                checkInterrupted();
+                try {
+                    try (var mode = sql.executeQuery("PRAGMA journal_mode")) {
+                        if (mode.next() && "wal".equalsIgnoreCase(mode.getString(1))) return;
+                    }
+                    sql.execute("PRAGMA journal_mode=WAL");
+                    return;
+                } catch (SQLException e) {
+                    int primary = e.getErrorCode() & 0xff;
+                    if ((primary != SQLiteErrorCode.SQLITE_BUSY.code && primary != SQLiteErrorCode.SQLITE_LOCKED.code)
+                            || TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start) >= WRITER_WAIT_MS) throw e;
+                    // Switching journal modes can return BUSY immediately when another connection opens this index.
+                    try { Thread.sleep(25); }
+                    catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new InterruptedIOException("색인 갱신을 중단했습니다.");
                     }
                 }
             }
-            for (String missing : existing.keySet()) {
-                remove.setString(1,missing); remove.executeUpdate();
+        }
+
+        List<String> pathsAfter(String after) throws SQLException {
+            var paths = new ArrayList<String>(INDEX_BATCH);
+            try (var select = db.prepareStatement("SELECT md FROM docs WHERE md > ? ORDER BY md LIMIT ?")) {
+                select.setString(1, after);
+                select.setInt(2, INDEX_BATCH);
+                try (var rows = select.executeQuery()) {
+                    while (rows.next()) paths.add(rows.getString(1));
+                }
             }
+            return paths;
+        }
+
+        BatchResult write(List<Path> notes, boolean removeOnly) throws SQLException, IOException {
+            checkInterrupted();
+            int indexed = 0, updated = 0, removed = 0;
+            sql.execute("BEGIN IMMEDIATE");
+            try {
+                for (Path note : notes) {
+                    checkInterrupted();
+                    Outcome outcome = removeOnly ? removeMissing(note) : index(note);
+                    if (outcome == Outcome.UNCHANGED || outcome == Outcome.UPDATED) indexed++;
+                    if (outcome == Outcome.UPDATED) updated++;
+                    if (outcome == Outcome.REMOVED) removed++;
+                }
+                checkInterrupted();
+                sql.execute("COMMIT");
+                return new BatchResult(indexed, updated, removed);
+            } catch (SQLException | IOException | RuntimeException e) {
+                try { sql.execute("ROLLBACK"); } catch (SQLException rollback) { e.addSuppressed(rollback); }
+                throw e;
+            }
+        }
+
+        private Outcome removeMissing(Path note) throws SQLException {
+            if (!library.equals(note.getParent()) || Files.notExists(note)) return delete(note);
+            return Outcome.SKIPPED;
+        }
+
+        private Outcome delete(Path note) throws SQLException {
+            remove.setString(1, note.toString());
+            return remove.executeUpdate() == 0 ? Outcome.SKIPPED : Outcome.REMOVED;
+        }
+
+        private Outcome index(Path file) throws SQLException, IOException {
+            var attrs = attributes(file);
+            if (attrs == null) return removeMissing(file);
+            if (!attrs.isRegularFile()) return delete(file);
+            String stamp = stamp(attrs);
+
+            lookup.setString(1, file.toString());
+            try (var row = lookup.executeQuery()) {
+                if (row.next()) {
+                    String[] previous = row.getString(1).split("\n", 3);
+                    if (previous.length == 3 && stamp.equals(previous[0])
+                            && PictureAssets.manifestStamp(file, previous[1]).equals(previous[2])) return Outcome.UNCHANGED;
+                }
+            }
+
+            // A converter may publish another generation while the body is being read.
+            sql.execute("SAVEPOINT document_update");
+            Outcome outcome = delete(file);
+            try (var in = Files.newBufferedReader(file)) {
+                String heading = in.readLine();
+                in.readLine();
+                Path source = original(in.readLine());
+                if (heading != null && heading.startsWith("# ") && source != null) {
+                    String generation = null, value;
+                    while ((value = in.readLine()) != null && !value.startsWith("## ")) {
+                        checkInterrupted();
+                        if (generation == null) generation = PictureAssets.generation(value);
+                    }
+                    String manifestStamp = PictureAssets.manifestStamp(file, generation);
+                    writeNote(file, stamp, source, heading.substring(2), generation, manifestStamp, in, value);
+                    outcome = manifestStamp.equals(PictureAssets.manifestStamp(file, generation))
+                            ? Outcome.UPDATED : Outcome.SKIPPED;
+                }
+            } catch (NoSuchFileException e) {
+                outcome = Outcome.SKIPPED;
+            }
+            var after = attributes(file);
+            if (after == null || !stamp.equals(stamp(after)) || !attrs.creationTime().equals(after.creationTime()))
+                outcome = Outcome.SKIPPED;
+            if (outcome == Outcome.SKIPPED) sql.execute("ROLLBACK TO document_update");
+            sql.execute("RELEASE document_update");
+            return outcome;
+        }
+
+        private void writeNote(Path file, String stamp, Path source, String title, String generation,
+                               String manifestStamp, BufferedReader in, String value) throws SQLException, IOException {
+            doc.setString(1, file.toString());
+            doc.setString(2, stamp + "\n" + Objects.toString(generation, "") + "\n" + manifestStamp);
+            doc.setString(3, source.toString());
+            doc.setString(4, title);
+            long id;
+            try (var row = doc.executeQuery()) {
+                row.next();
+                id = row.getLong(1);
+            }
+            add(line, id, 0, "제목", title);
+            add(line, id, 1, "원본 경로", source.toString());
+
+            Map<String, PictureAssets.Entry> images = new HashMap<>();
+            String imagePrefix = PictureAssets.prefix(PictureAssets.key(file), generation);
+            for (var entry : PictureAssets.entries(file, generation)) {
+                var reference = new PictureAssets.Reference(imagePrefix + entry.filename(), entry.location());
+                images.put(PictureAssets.markdownLine(reference), entry);
+            }
+            String section = "";
+            for (; value != null; value = in.readLine()) {
+                checkInterrupted();
+                if (value.startsWith("## ")) section = value.substring(3);
+                if (section.isEmpty() || value.isBlank()) continue;
+                var image = images.get(value);
+                if (image != null && section.equals(image.section())) {
+                    images.remove(value);
+                    picture.setLong(1, id);
+                    picture.setString(2, imagePrefix + image.filename());
+                    picture.setString(3, image.location());
+                    picture.setString(4, section);
+                    picture.setString(5, image.text());
+                    picture.setString(6, image.text().toLowerCase(Locale.ROOT));
+                    picture.executeUpdate();
+                    continue;
+                }
+                if (value.startsWith("| ")) value = value.replace("<br>", " ")
+                        .replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+                        .replace("\\|", "|").replace("\\\\", "\\");
+                add(line, id, 2, section, value);
+            }
+        }
+
+        @Override public void close() throws SQLException {
+            db.close();
+        }
+    }
+
+    private static BasicFileAttributes attributes(Path file) throws IOException {
+        try { return Files.readAttributes(file, BasicFileAttributes.class); }
+        catch (NoSuchFileException e) { return null; }
+    }
+
+    private static String stamp(BasicFileAttributes attrs) {
+        return attrs.lastModifiedTime() + "/" + attrs.size() + "/" + attrs.fileKey();
+    }
+
+    private static Path original(String link) {
+        String prefix = "[원본 파일 열기](<";
+        if (link == null || !link.startsWith(prefix) || !link.endsWith(">)")) return null;
+        try {
+            Path source = Path.of(URI.create(link.substring(prefix.length(), link.length() - 2)));
+            return source.getFileName() != null && Library.supported(source) ? source : null;
+        } catch (IllegalArgumentException | FileSystemNotFoundException e) {
+            return null;
         }
     }
 
@@ -162,7 +477,12 @@ final class SearchIndex {
             SELECT md,source,title,section,text FROM ranked
             ORDER BY score DESC,occurrence,coverage DESC,kind,title,md,id LIMIT ?
             """;
-        int kind = switch(scope) {case ALL -> -1; case TITLE -> 0; case CONTENT -> 2;};
+        int kind = switch(scope) {
+            case ALL -> -1;
+            case TITLE -> 0;
+            case CONTENT -> 2;
+            case IMAGE -> throw new IllegalArgumentException("그림 검색 범위");
+        };
         try (var stmt = db.prepareStatement(sql)) {
             String json = new com.google.gson.Gson().toJson(words);
             stmt.setString(1,json);
@@ -176,12 +496,19 @@ final class SearchIndex {
     }
 
     private static List<Library.Hit> find(Connection db, String query, Scope scope, int limit) throws SQLException {
+        if (query.isEmpty()) {
+            try (var stmt = db.prepareStatement("SELECT md,source,title,'제목',title FROM docs ORDER BY title,md LIMIT ?")) {
+                stmt.setInt(1, limit);
+                return results(stmt);
+            }
+        }
         String needle = query.toLowerCase(Locale.ROOT);
         boolean indexed = needle.codePointCount(0,needle.length()) >= 3;
-        String filter = query.isEmpty() ? "kind=0" : switch (scope) {
+        String filter = switch (scope) {
             case TITLE -> "kind=0";
             case CONTENT -> "kind=2";
             case ALL -> "(kind<>1 OR instr(lower(d.title),?)=0)";
+            case IMAGE -> throw new IllegalArgumentException("그림 검색 범위");
         };
         String sql = """
                 SELECT md,source,title,section,text FROM (
@@ -192,11 +519,45 @@ final class SearchIndex {
                 + " AND instr(l.folded,?)>0) ORDER BY kind,occurrence,title,md,id LIMIT ?";
         try (var stmt = db.prepareStatement(sql)) {
             int i = 1;
-            if (!query.isEmpty() && scope == Scope.ALL) stmt.setString(i++,needle);
+            if (scope == Scope.ALL) stmt.setString(i++,needle);
             if (indexed) stmt.setString(i++,"\"" + needle.replace("\"","\"\"") + "\"");
             stmt.setString(i++,needle); stmt.setInt(i,limit);
             return results(stmt);
         }
+    }
+
+    private static List<Library.Hit> findPictures(Connection db, List<String> words, Mode mode, int limit) throws SQLException {
+        String sql = """
+            WITH words(word) AS (SELECT value FROM json_each(?)),
+            matches AS (
+                SELECT p.id FROM words w CROSS JOIN picture_terms
+                JOIN pictures p ON p.id=picture_terms.rowid
+                WHERE length(w.word)>=3 AND picture_terms MATCH ('"' || replace(w.word,'"','""') || '"')
+                    AND instr(p.folded,w.word)>0
+                UNION ALL
+                SELECT p.id FROM words w CROSS JOIN pictures p
+                WHERE length(w.word)<3 AND instr(p.folded,w.word)>0
+            ), ranked AS (SELECT id,count(*) AS score FROM matches GROUP BY id HAVING count(*)>=?)
+            SELECT d.md,d.source,d.title,p.section,p.text,p.path,p.location
+            FROM ranked r JOIN pictures p ON p.id=r.id JOIN docs d ON d.id=p.doc
+            ORDER BY r.score DESC,d.title,d.md,p.id LIMIT ?
+            """;
+        List<Library.Hit> results = new ArrayList<>();
+        try (var stmt = db.prepareStatement(sql)) {
+            stmt.setString(1,new com.google.gson.Gson().toJson(words));
+            stmt.setInt(2,mode == Mode.AND ? words.size() : 1);
+            stmt.setInt(3,limit);
+            try (var rs = stmt.executeQuery()) {
+                while (rs.next()) results.add(pictureHit(rs));
+            }
+        }
+        return results;
+    }
+
+    private static Library.Hit pictureHit(ResultSet rs) throws SQLException {
+        var picture = new PictureAssets.Reference(rs.getString(6),rs.getString(7));
+        return new Library.Hit(Path.of(rs.getString(1)),Path.of(rs.getString(2)),
+                rs.getString(3),rs.getString(4),rs.getString(5),picture);
     }
 
     private static List<Library.Hit> results(PreparedStatement stmt) throws SQLException {

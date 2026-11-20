@@ -29,19 +29,23 @@ final class Library {
         Path file = source.toRealPath();
         if (!supported(file)) throw new IOException("지원하지 않는 파일 형식");
         Files.createDirectories(library);
+        library = library.toRealPath();
         String uri = file.toUri().toASCIIString();
         String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest(file.toString().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8)));
         String name = file.getFileName().toString();
         Path target = library.resolve(name.substring(0, Math.min(80, name.length())) + "-" + hash.substring(0, 20) + ".md");
         Path temp = Files.createTempFile(library, ".convert-", ".tmp");
-        try {
+        try (var pictures = new PictureAssets(target, ocr)) {
             try (BufferedWriter out = Files.newBufferedWriter(temp)) {
                 out.write("# " + name + "\n\n[원본 파일 열기](<" + uri + ">)\n\n원본 경로　" + file + "\n");
+                pictures.writeHeader(out);
                 String ext = name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
-                if (ext.startsWith("xls")) {
+                if (ext.equals("xlsx")) {
+                    XlsxStreaming.write(file, library, out, pictures);
+                } else if (ext.equals("xls")) {
                     try (Workbook book = WorkbookFactory.create(file.toFile(), null, true)) {
-                        spreadsheet(book, out, ocr);
+                        spreadsheet(book, out, pictures);
                     }
                 } else {
                     try (InputStream in = Files.newInputStream(file);
@@ -49,7 +53,7 @@ final class Library {
                         int number = 0;
                         for (Slide<?, ?> slide : show.getSlides()) {
                             out.write("\n## 슬라이드 " + (++number) + "\n\n");
-                            shapes(slide.getShapes(), out, ocr, "슬라이드 "+number);
+                            shapes(slide.getShapes(), out, pictures, "슬라이드 "+number);
                             Notes<?, ?> notes = slide.getNotes();
                             if (notes != null) {
                                 for (var paragraphs : notes.getTextParagraphs()) {
@@ -65,8 +69,7 @@ final class Library {
                     }
                 }
             }
-            try { Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-            catch (AtomicMoveNotSupportedException e) { Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING); }
+            pictures.publish(temp);
             return target;
         } finally { Files.deleteIfExists(temp); }
     }
@@ -75,7 +78,11 @@ final class Library {
         return text.replace("\r\n", "\n").replace('\r', '\n').replaceAll("(?m)^#", "\\\\#");
     }
 
-    private static void shapes(List<? extends Shape<?, ?>> shapes, Writer out, ImageOcr ocr, String location) throws IOException {
+    static String sheetSection(String name) {
+        return "시트 · " + name.replaceAll("\\R", " ");
+    }
+
+    private static void shapes(List<? extends Shape<?, ?>> shapes, Writer out, PictureAssets pictures, String section) throws IOException {
         for (Shape<?, ?> shape : shapes) {
             if (shape instanceof TableShape<?, ?> table) {
                 for (int i = 0; i < table.getNumberOfRows(); i++) {
@@ -95,9 +102,9 @@ final class Library {
                 for (String field : new LinkedHashSet<>(Arrays.asList(props.getTitle(), props.getDescr()))) {
                     if (field != null && !field.isBlank()) out.write("그림 · " + plain(field) + "\n\n");
                 }
-                if (ocr!=null && picture.getPictureData()!=null)
-                    ocr.write(picture.getPictureData().getData(),picture.getPictureData().getType().name(),location+" · "+picture.getShapeName(),out);
-            } else if (shape instanceof GroupShape<?, ?> group) shapes(group.getShapes(), out, ocr, location);
+                var data = picture.getPictureData();
+                if (data != null) pictures.write(data.getData(), data.getType().name(), section, section + " · " + picture.getShapeName(), out);
+            } else if (shape instanceof GroupShape<?, ?> group) shapes(group.getShapes(), out, pictures, section);
             else if (shape instanceof TextShape<?, ?> text && !text.getText().isBlank()) {
                 out.write(plain(text.getText()) + "\n\n");
             }
@@ -111,24 +118,25 @@ final class Library {
     }
 
     private static void sheetPictures(Iterable<org.apache.poi.xssf.usermodel.XSSFShape> shapes,
-                                      ImageOcr ocr, String sheet, Writer out) throws IOException {
+                                      PictureAssets pictures, String sheet, Writer out) throws IOException {
         for (var shape : shapes) {
             if (shape instanceof org.apache.poi.xssf.usermodel.XSSFPicture picture) {
                 var anchor=picture.getClientAnchor();
                 String location=anchor==null ? sheet : sheet+" · "+new CellReference(anchor.getRow1(),anchor.getCol1()).formatAsString();
-                if (picture.getPictureData()!=null) ocr.write(picture.getPictureData().getData(),picture.getPictureData().suggestFileExtension(),location,out);
+                var data = picture.getPictureData();
+                if (data != null) pictures.write(data.getData(), data.suggestFileExtension(), sheetSection(sheet), location, out);
             } else if (shape instanceof org.apache.poi.xssf.usermodel.XSSFShapeGroup group)
-                sheetPictures(group,ocr,sheet,out);
+                sheetPictures(group,pictures,sheet,out);
         }
     }
 
-    private static void spreadsheet(Workbook book, Writer out, ImageOcr ocr) throws IOException {
+    static void spreadsheet(Workbook book, Writer out, PictureAssets pictures) throws IOException {
         DataFormatter display = new DataFormatter(Locale.KOREA);
         display.setUseCachedValuesForFormulaCells(true);
         for (Sheet sheet : book) {
-            out.write("\n## 시트 · " + sheet.getSheetName() + "\n\n");
-            if (ocr!=null && sheet instanceof org.apache.poi.xssf.usermodel.XSSFSheet xs && xs.getDrawingPatriarch()!=null)
-                sheetPictures(xs.getDrawingPatriarch(),ocr,sheet.getSheetName(),out);
+            out.write("\n## " + sheetSection(sheet.getSheetName()) + "\n\n");
+            if (sheet instanceof org.apache.poi.xssf.usermodel.XSSFSheet xs && xs.getDrawingPatriarch()!=null)
+                sheetPictures(xs.getDrawingPatriarch(),pictures,sheet.getSheetName(),out);
             int first = Integer.MAX_VALUE, last = 0;
             for (Row row : sheet) {
                 if (row.getFirstCellNum() >= 0) {
@@ -165,7 +173,10 @@ final class Library {
         }
     }
 
-    record Hit(Path md, Path source, String title, String section, String excerpt) {
+    record Hit(Path md, Path source, String title, String section, String excerpt, PictureAssets.Reference picture) {
+        Hit(Path md, Path source, String title, String section, String excerpt) {
+            this(md, source, title, section, excerpt, null);
+        }
         @Override public String toString() { return title + "   " + section; }
     }
 

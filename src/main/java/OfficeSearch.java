@@ -18,7 +18,7 @@ public final class OfficeSearch {
                     case "--mode" -> mode = SearchIndex.Mode.valueOf(args[++i].toUpperCase(Locale.ROOT));
                     case "--limit" -> limit = Integer.parseInt(args[++i]);
                     case "--help" -> {
-                        System.out.println("OfficeSearch.exe [--scope all|title|content] [--mode phrase|and|or] [--limit 1..500] [--library DIR] [QUERY]");
+                        System.out.println("OfficeSearch.exe [--scope all|title|content|image] [--mode phrase|and|or] [--limit 1..500] [--library DIR] [QUERY]");
                         return;
                     }
                     default -> terms.add(args[i]);
@@ -26,9 +26,15 @@ public final class OfficeSearch {
             }
             if (limit < 1 || limit > 500) throw new IllegalArgumentException("--limit 1..500");
             var results = new ArrayList<Map<String,String>>();
-            for (var hit : SearchIndex.search(library,String.join(" ",terms),scope,mode,limit))
-                results.add(Map.of("title",hit.title(),"section",hit.section(),"excerpt",hit.excerpt(),
+            for (var hit : SearchIndex.search(library,String.join(" ",terms),scope,mode,limit)) {
+                var result = new LinkedHashMap<>(Map.of("title",hit.title(),"section",hit.section(),"excerpt",hit.excerpt(),
                         "markdownPath",hit.md().toString(),"sourcePath",hit.source().toString()));
+                if (hit.picture() != null) {
+                    result.put("imagePath",hit.md().getParent().resolve(hit.picture().relativePath()).toString());
+                    result.put("imageLocation",hit.picture().location());
+                }
+                results.add(result);
+            }
             System.out.write((new Gson().toJson(results) + "\n").getBytes(StandardCharsets.UTF_8));
             System.out.flush();
         } catch (Exception e) {

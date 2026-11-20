@@ -4,7 +4,6 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
 import java.io.IOException;
 import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.List;
 
@@ -17,11 +16,19 @@ public final class OfficeMarkdown {
     private final JComboBox<SearchIndex.Scope> scope = new JComboBox<>(SearchIndex.Scope.values());
     private final JComboBox<SearchIndex.Mode> mode = new JComboBox<>(SearchIndex.Mode.values());
     private final JButton search = new JButton("검색"), add = new JButton("파일 추가"), folder = new JButton("폴더 추가");
+    private final JButton findBrokenOcr = new JButton("OCR 깨짐 점검");
+    private final JButton repairOcr = new JButton("선택 그림 재인식");
+    private final JCheckBox reconvertSameName = new JCheckBox("같은 파일명 다시 변환", true);
+    private static final int AUTOMATIC_WORKERS = 0;
+    private final JComboBox<Integer> conversionWorkers = new JComboBox<>(new Integer[]{1, 2, AUTOMATIC_WORKERS});
     private final JButton original = new JButton("원본 열기"), locate = new JButton("파일 위치"), note = new JButton("MD 원문 열기");
+    private final JButton pictureLocation = new JButton("MD 위치 보기");
     private final DefaultListModel<Library.Hit> model = new DefaultListModel<>();
     private final JList<Library.Hit> results = new JList<>(model);
     private final JTextArea preview = new JTextArea(6, 50);
     private final JLabel status = new JLabel(" ");
+    private final JLabel indexStatus = new JLabel(" ");
+    private final JButton syncIndex = new JButton("색인 새로 고침");
     private static final int LIMIT = 500;
 
     private final JLabel count = LibraryStyle.label("문서 목록", 16, true, LibraryStyle.INK);
@@ -36,12 +43,28 @@ public final class OfficeMarkdown {
     private final JProgressBar progress = new JProgressBar();
     private SwingWorker<List<MarkdownReader.Page>,Void> reader;
     private SwingWorker<String,Void> rendering;
+    private SwingWorker<Icon,Void> loadingPicture;
+    private SwingWorker<Void,Thumbnail> loadingThumbnails;
+    private SwingWorker<List<Library.Hit>,Void> searchWorker;
+    private SwingWorker<Void,SearchIndex.Progress> indexWorker;
+    private final Map<Library.Hit,Icon> thumbnails = new HashMap<>();
+    private final JLabel picturePreview = LibraryStyle.label("", 14, false, LibraryStyle.MUTED);
     private final JEditorPane viewer=new JEditorPane("text/html","");
     private final JComboBox<MarkdownReader.Page> chapters=new JComboBox<>();
     private final JTabbedPane tabs=new JTabbedPane();
     private boolean loadingChapters;
     private boolean showImport;
+    private enum ResultView { DOCUMENT, PICTURE, BROKEN_OCR }
+    private ResultView resultView = ResultView.DOCUMENT;
+    private boolean working;
+    private boolean startupSyncStarted;
+    private SearchRequest lastSearch;
+    private SearchRequest displayedSearch;
+    private String lastSearchSummary = "";
     private List<String> activeWords = List.of();
+
+    private record Thumbnail(Library.Hit hit, Icon icon) {}
+    private record SearchRequest(String needle, SearchIndex.Scope scope, SearchIndex.Mode mode, boolean brokenOcr) {}
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
@@ -79,6 +102,12 @@ public final class OfficeMarkdown {
         });
         assistant.addActionListener(e -> {
             if(agentDialog==null || !agentDialog.isDisplayable()) agentDialog=new AgentDialog(frame,library,hit -> {
+            if (working) return;
+            cancelSearch();
+            lastSearch = null;
+            displayedSearch = null;
+            status.setText("답변 근거");
+            setResultView(ResultView.DOCUMENT);
             model.clear(); activeWords=List.of(hit.excerpt()); model.addElement(hit);
             count.setText("답변 근거"); pages.show(contents,"results"); results.setSelectedIndex(0);
             },hit -> open(hit,false,false));
@@ -96,10 +125,30 @@ public final class OfficeMarkdown {
         JPanel options=LibraryStyle.panel(new BorderLayout(),0);
         options.add(heading);
         JPanel imageOptions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
-        JLabel imageLabel=new JLabel("가져오기 · 그림 글자 인식");
+        JLabel imageLabel=new JLabel("그림 글자 인식");
         imageLabel.setLabelFor(ocrMode); imageOptions.add(imageLabel); imageOptions.add(ocrMode);
         ocrMode.setToolTipText("PPTX·XLSX를 추가할 때 사용할 OCR 방식");
-        options.add(imageOptions,BorderLayout.EAST); searchBox.add(options,BorderLayout.NORTH);
+        JLabel parallelLabel = new JLabel("동시 변환");
+        parallelLabel.setLabelFor(conversionWorkers);
+        conversionWorkers.setRenderer(new DefaultListCellRenderer() {
+            @Override public Component getListCellRendererComponent(JList<?> list, Object value, int index,
+                                                                     boolean selected, boolean focused) {
+                Object label = Objects.equals(value, AUTOMATIC_WORKERS) ? "자동(CPU·메모리)" : value;
+                return super.getListCellRendererComponent(list, label, index, selected, focused);
+            }
+        });
+        conversionWorkers.setPrototypeDisplayValue(AUTOMATIC_WORKERS);
+        imageOptions.add(parallelLabel);
+        imageOptions.add(conversionWorkers);
+        ocrMode.addActionListener(e -> updateWorkerChoice());
+        updateWorkerChoice();
+        JPanel batchOptions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
+        reconvertSameName.setToolTipText("끄면 폴더 위치와 관계없이 같은 이름과 확장자의 변환 결과가 있는 파일을 건너뜁니다.");
+        batchOptions.add(reconvertSameName);
+        JPanel importOptions = LibraryStyle.panel(new BorderLayout(),0);
+        importOptions.add(imageOptions);
+        importOptions.add(batchOptions,BorderLayout.SOUTH);
+        options.add(importOptions,BorderLayout.EAST); searchBox.add(options,BorderLayout.NORTH);
         JPanel bar = LibraryStyle.panel(new BorderLayout(8,0),0);
         query.putClientProperty("JTextField.placeholderText","파일 이름이나 문서 내용을 입력하세요");
         query.putClientProperty("JTextField.showClearButton",true);
@@ -108,14 +157,23 @@ public final class OfficeMarkdown {
         mode.setToolTipText("공백으로 나눈 단어를 같은 문서에서 찾는 방식");
         JPanel filters = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,4,0),0);
         filters.add(scope); filters.add(mode);
-        bar.add(filters,BorderLayout.WEST); bar.add(query); bar.add(search,BorderLayout.EAST);
+        JPanel searchActions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
+        findBrokenOcr.setToolTipText("저장된 그림에서 깨짐이 의심되는 글자 인식 결과를 찾습니다.");
+        searchActions.add(findBrokenOcr); searchActions.add(search);
+        bar.add(filters,BorderLayout.WEST); bar.add(query); bar.add(searchActions,BorderLayout.EAST);
         searchBox.add(bar); workspace.add(searchBox,BorderLayout.NORTH);
-        for (JButton b : List.of(search,original,locate,note,emptyButton)) LibraryStyle.button(b,b==search || b==original || b==emptyButton);
+        for (JButton b : List.of(search,findBrokenOcr,repairOcr,original,locate,note,pictureLocation,emptyButton))
+            LibraryStyle.button(b,b==search || b==original || b==emptyButton);
 
         JPanel left = LibraryStyle.card(new BorderLayout(0,10));
-        left.add(count,BorderLayout.NORTH);
+        JPanel resultHeader = LibraryStyle.panel(new BorderLayout(0,6),0);
+        resultHeader.add(count,BorderLayout.NORTH);
+        resultHeader.add(repairOcr,BorderLayout.SOUTH);
+        repairOcr.setVisible(false);
+        repairOcr.setToolTipText("목록에서 선택한 그림을 로컬 PaddleOCR로 다시 읽습니다. Ctrl 또는 Shift로 여러 그림을 선택할 수 있습니다.");
+        left.add(resultHeader,BorderLayout.NORTH);
         results.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        results.setCellRenderer(LibraryStyle.renderer()); results.setFixedCellHeight(64);
+        results.setCellRenderer(LibraryStyle.renderer(thumbnails::get)); results.setFixedCellHeight(70);
         results.setFixedCellWidth(240);
         results.getAccessibleContext().setAccessibleName("검색 결과");
         JScrollPane items = new JScrollPane(results); items.setBorder(null);
@@ -139,13 +197,19 @@ public final class OfficeMarkdown {
         JPanel document=LibraryStyle.panel(new BorderLayout(0,6),0);
         document.add(chapters,BorderLayout.NORTH); document.add(new JScrollPane(viewer));
         tabs.addTab("문서 보기",document); tabs.addTab("검색 근거",reading);
+        picturePreview.setHorizontalAlignment(SwingConstants.CENTER);
+        picturePreview.setVerticalAlignment(SwingConstants.CENTER);
+        picturePreview.getAccessibleContext().setAccessibleName("검색된 그림 미리보기");
+        tabs.addTab("그림 미리보기",new JScrollPane(picturePreview));
+        tabs.setEnabledAt(2,false);
         right.add(tabs);
         JPanel lower = LibraryStyle.panel(new BorderLayout(0,6),0);
         lower.add(LibraryStyle.label("원본 위치",12,true,LibraryStyle.MUTED),BorderLayout.NORTH);
         pathText.setRows(1); pathText.setFont(LibraryStyle.TYPE.deriveFont(12f));
         JScrollPane location = new JScrollPane(pathText); location.setBorder(null); lower.add(location);
         JPanel actions = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,4,0),0);
-        for (JButton b : List.of(original,note,locate)) actions.add(b);
+        for (JButton b : List.of(original,pictureLocation,note,locate)) actions.add(b);
+        pictureLocation.setVisible(false);
         lower.add(actions,BorderLayout.SOUTH); right.add(lower,BorderLayout.SOUTH);
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,left,right);
         split.setBorder(null); split.setOpaque(false); split.setDividerSize(10); split.setResizeWeight(.32);
@@ -158,10 +222,18 @@ public final class OfficeMarkdown {
             prompt.add(c,pos);
         blank.add(prompt); contents.add(blank,"empty");
         workspace.add(contents); body.add(workspace);
-        JPanel footer = LibraryStyle.panel(new BorderLayout(10,0),0);
+        JPanel footer = LibraryStyle.panel(new BorderLayout(0,4),0);
         footer.setBorder(new EmptyBorder(0,24,12,24)); status.setForeground(LibraryStyle.MUTED);
-        progress.setPreferredSize(new Dimension(90,5)); progress.setVisible(false);
-        footer.add(status); footer.add(progress,BorderLayout.EAST); body.add(footer,BorderLayout.SOUTH);
+        JPanel statusLine = LibraryStyle.panel(new BorderLayout(10,0),0);
+        progress.setPreferredSize(new Dimension(170,18)); progress.setVisible(false);
+        statusLine.add(status); statusLine.add(progress,BorderLayout.EAST); footer.add(statusLine,BorderLayout.NORTH);
+        JPanel indexLine = LibraryStyle.panel(new BorderLayout(10,0),0);
+        indexStatus.setForeground(LibraryStyle.MUTED);
+        syncIndex.setToolTipText("Markdown 폴더의 변경 내용을 색인에 반영합니다.");
+        LibraryStyle.button(syncIndex, false);
+        syncIndex.addActionListener(e -> startIndexSync());
+        indexLine.add(indexStatus); indexLine.add(syncIndex,BorderLayout.EAST); footer.add(indexLine,BorderLayout.SOUTH);
+        body.add(footer,BorderLayout.SOUTH);
 
         results.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) selection(); });
         results.addMouseListener(new java.awt.event.MouseAdapter() {
@@ -179,17 +251,43 @@ public final class OfficeMarkdown {
             try { Files.createDirectories(library); Desktop.getDesktop().open(library.toFile()); }
             catch (Exception ex) { error(ex); }
         });
-        scope.addActionListener(e -> refresh(""));
-        mode.addActionListener(e -> refresh(""));
+        scope.addActionListener(e -> {
+            query.putClientProperty("JTextField.placeholderText",scope.getSelectedItem() == SearchIndex.Scope.IMAGE
+                    ? "그림 속 글자를 입력하세요" : "파일 이름이나 문서 내용을 입력하세요");
+            if (search.isEnabled()) refresh("");
+        });
+        mode.addActionListener(e -> { if (search.isEnabled()) refresh(""); });
         query.addActionListener(e -> { if (search.isEnabled()) refresh(""); });
         query.putClientProperty("JTextField.clearCallback",(java.util.function.Consumer<JTextField>)field -> {
             field.setText(""); if (search.isEnabled()) refresh("");
         });
         search.addActionListener(e -> refresh(""));
+        findBrokenOcr.addActionListener(e -> refreshBrokenOcr(""));
+        repairOcr.addActionListener(e -> repairSelectedOcr());
         original.addActionListener(e -> open(false,false)); locate.addActionListener(e -> open(false,true));
         note.addActionListener(e -> open(true,false));
+        pictureLocation.addActionListener(e -> {
+            var hit = selectedHit();
+            if (hit == null || hit.picture() == null) return;
+            tabs.setSelectedIndex(0);
+            var current = (MarkdownReader.Page) chapters.getSelectedItem();
+            if (current == null) return;
+            for (int i = 0; i < chapters.getItemCount(); i++) {
+                if (MarkdownReader.containsPicture(chapters.getItemAt(i),hit.picture())) {
+                    if (i == chapters.getSelectedIndex()) scrollToPicture();
+                    else chapters.setSelectedIndex(i);
+                    break;
+                }
+            }
+        });
         emptyButton.addActionListener(e -> {
-            if (showImport) choose(false); else { query.setText(""); refresh(""); query.requestFocusInWindow(); }
+            if (showImport) choose(false);
+            else {
+                query.setText("");
+                if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE) scope.setSelectedItem(SearchIndex.Scope.ALL);
+                else refresh("");
+                query.requestFocusInWindow();
+            }
         });
         body.setTransferHandler(new TransferHandler() {
             public boolean canImport(TransferSupport support) {
@@ -218,22 +316,37 @@ public final class OfficeMarkdown {
         });
     }
 
+    private Library.Hit selectedHit() {
+        int lead = results.getLeadSelectionIndex();
+        if (lead >= 0 && lead < model.size() && results.isSelectedIndex(lead)) return model.get(lead);
+        return results.getSelectedValue();
+    }
+
     private void selection() {
         if (reader!=null) reader.cancel(true);
         if (rendering!=null) rendering.cancel(true);
         loadingChapters=true; chapters.removeAllItems(); loadingChapters=false;
-        viewer.setText(""); tabs.setSelectedIndex(0);
-        Library.Hit hit = results.getSelectedValue();
+        if (loadingPicture!=null) loadingPicture.cancel(true);
+        picturePreview.setIcon(null); picturePreview.setText("");
+        viewer.setText("");
+        Library.Hit hit = selectedHit();
+        boolean picture = hit != null && hit.picture() != null;
+        repairOcr.setEnabled(resultView != ResultView.DOCUMENT && !working && picture);
+        tabs.setEnabledAt(2,picture);
+        tabs.setSelectedIndex(picture ? 2 : 0);
+        pictureLocation.setVisible(picture);
         for (JButton b : List.of(original, locate, note)) b.setEnabled(hit != null);
         if (hit==null) {preview.setText(""); pathText.setText(""); detailTitle.setText(""); sectionLabel.setText(""); return;}
         detailTitle.setText(hit.title()); detailTitle.setToolTipText(hit.title());
-        sectionLabel.setText(hit.section()); pathText.setText(hit.source().toString()); pathText.setCaretPosition(0);
+        sectionLabel.setText(picture ? "그림 " + hit.picture().number() + " · " + hit.picture().location() : hit.section());
+        pathText.setText(hit.source().toString()); pathText.setCaretPosition(0);
         preview.setText(hit.excerpt()); highlight(); preview.setCaretPosition(0);
         viewer.setText("문서를 불러오는 중…");
+        if (picture) loadPicture(hit);
         reader=new SwingWorker<>() {
             protected List<MarkdownReader.Page> doInBackground() throws Exception { return MarkdownReader.read(hit.md()); }
             protected void done() {
-                if(isCancelled() || results.getSelectedValue()!=hit) return;
+                if(isCancelled() || selectedHit()!=hit) return;
                 try {
                     var sections=get();
                     loadingChapters=true;
@@ -252,8 +365,10 @@ public final class OfficeMarkdown {
         if(rendering!=null) rendering.cancel(true);
         var page=(MarkdownReader.Page)chapters.getSelectedItem();
         if(page==null) return;
+        var hit = selectedHit();
+        var picture = hit == null ? null : hit.picture();
         rendering=new SwingWorker<>() {
-            protected String doInBackground() { return MarkdownReader.html(page); }
+            protected String doInBackground() { return MarkdownReader.html(page,picture); }
             protected void done() {
                 if(isCancelled() || chapters.getSelectedItem()!=page) return;
                 try {
@@ -273,10 +388,67 @@ public final class OfficeMarkdown {
                         }
                     }
                     if(first>=0) viewer.setCaretPosition(first);
+                    if (picture != null) scrollToPicture();
                 } catch(Exception e) { viewer.setText("문서를 표시할 수 없습니다."); }
             }
         };
         rendering.execute();
+    }
+
+    private void scrollToPicture() {
+        if (!(viewer.getDocument() instanceof javax.swing.text.html.HTMLDocument doc)) return;
+        var anchors = doc.getIterator(javax.swing.text.html.HTML.Tag.A);
+        while (anchors.isValid()) {
+            if (MarkdownReader.PICTURE_ANCHOR.equals(anchors.getAttributes().getAttribute(javax.swing.text.html.HTML.Attribute.NAME))) {
+                viewer.setCaretPosition(Math.min(anchors.getStartOffset(),doc.getLength()));
+                SwingUtilities.invokeLater(() -> viewer.scrollToReference(MarkdownReader.PICTURE_ANCHOR));
+                return;
+            }
+            anchors.next();
+        }
+    }
+
+    private void loadPicture(Library.Hit hit) {
+        picturePreview.setText("그림을 불러오는 중…");
+        loadingPicture = new SwingWorker<>() {
+            protected Icon doInBackground() {
+                var image = PictureAssets.preview(hit.md(),hit.picture(),false);
+                return image == null ? null : new ImageIcon(image);
+            }
+            protected void done() {
+                if (isCancelled() || selectedHit() != hit) return;
+                Icon icon = null;
+                try { icon = get(); }
+                catch (java.util.concurrent.ExecutionException ignored) {}
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                picturePreview.setIcon(icon);
+                picturePreview.setText(icon == null ? "그림 미리보기를 표시할 수 없습니다." : "");
+            }
+        };
+        loadingPicture.execute();
+    }
+
+    private void loadThumbnails(List<Library.Hit> hits) {
+        if (loadingThumbnails != null) loadingThumbnails.cancel(true);
+        thumbnails.clear();
+        var pictures = hits.stream().filter(hit -> hit.picture() != null).toList();
+        if (pictures.isEmpty()) return;
+        loadingThumbnails = new SwingWorker<>() {
+            protected Void doInBackground() {
+                for (var hit : pictures) {
+                    if (isCancelled()) break;
+                    var image = PictureAssets.preview(hit.md(),hit.picture(),true);
+                    if (image != null) publish(new Thumbnail(hit,new ImageIcon(image)));
+                }
+                return null;
+            }
+            protected void process(List<Thumbnail> icons) {
+                if (isCancelled()) return;
+                for (var icon : icons) thumbnails.put(icon.hit(),icon.icon());
+                results.repaint();
+            }
+        };
+        loadingThumbnails.execute();
     }
 
     private void highlight() {
@@ -297,7 +469,7 @@ public final class OfficeMarkdown {
     }
 
     private void open(boolean markdown, boolean reveal) {
-        Library.Hit hit = results.getSelectedValue();
+        Library.Hit hit = selectedHit();
         if (hit != null) open(hit,markdown,reveal);
     }
 
@@ -318,36 +490,285 @@ public final class OfficeMarkdown {
     }
 
     private void busy(boolean value, String text) {
-        for (JButton b : List.of(search, add, folder)) b.setEnabled(!value);
-        scope.setEnabled(!value); emptyButton.setEnabled(!value); query.setEditable(!value);
-        mode.setEnabled(!value);
-        progress.setVisible(value); progress.setIndeterminate(value);
+        working = value;
+        if (value) cancelSearch();
+        for (JButton b : List.of(search, add, folder, findBrokenOcr, emptyButton)) b.setEnabled(!value);
+        var hit = selectedHit();
+        repairOcr.setEnabled(resultView != ResultView.DOCUMENT && !value && hit != null && hit.picture() != null);
+        scope.setEnabled(!value); query.setEditable(!value); mode.setEnabled(!value);
+        ocrMode.setEnabled(!value); reconvertSameName.setEnabled(!value);
+        syncIndex.setEnabled(!value && indexWorker == null);
+        updateWorkerChoice();
+        progress.setIndeterminate(value); progress.setStringPainted(false); progress.setVisible(value);
+        status.setToolTipText(null);
         status.setText(text);
     }
 
+    private void updateWorkerChoice() {
+        var engine = ocrMode.getSelectedItem();
+        boolean canRunTwo = engine == ImageOcr.Mode.WINDOWS || engine == ImageOcr.Mode.OFF;
+        if (canRunTwo) {
+            setWorkerChoices(1, 2, AUTOMATIC_WORKERS);
+        } else if (engine == ImageOcr.Mode.PADDLE) {
+            setWorkerChoices(1, AUTOMATIC_WORKERS);
+        } else {
+            setWorkerChoices(1);
+        }
+        conversionWorkers.setEnabled(!working && conversionWorkers.getItemCount() > 1);
+        conversionWorkers.setToolTipText(engine == ImageOcr.Mode.VISION ? "비전 API는 한 번에 한 문서를 처리합니다."
+                : "자동을 선택하면 사용 가능한 CPU와 메모리에 맞춰 동시 변환 한도를 조정합니다.");
+    }
+
+    private void setWorkerChoices(Integer... choices) {
+        // Each mode has a distinct number of choices. Keep the model while changing the busy state.
+        if (conversionWorkers.getItemCount() == choices.length) return;
+        var previous = conversionWorkers.getSelectedItem();
+        conversionWorkers.setModel(new DefaultComboBoxModel<>(choices));
+        if (Arrays.asList(choices).contains(previous)) conversionWorkers.setSelectedItem(previous);
+    }
+
+    private void setResultView(ResultView view) {
+        resultView = view;
+        boolean pictures = view != ResultView.DOCUMENT;
+        repairOcr.setVisible(pictures);
+        results.setSelectionMode(pictures ? ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
+                : ListSelectionModel.SINGLE_SELECTION);
+        tabs.setTitleAt(1, pictures ? "인식 문구" : "검색 근거");
+    }
+
+    private void showHits(List<Library.Hit> hits, List<Library.Hit> previous) {
+        Set<Library.Hit> retained = new HashSet<>(previous);
+        var selected = new ArrayList<Integer>();
+        for (int index = 0; index < hits.size(); index++) {
+            if (retained.contains(hits.get(index))) selected.add(index);
+        }
+        loadThumbnails(hits);
+        model.clear();
+        model.addAll(hits);
+        if (!hits.isEmpty()) {
+            if (selected.isEmpty()) results.setSelectedIndex(0);
+            else results.setSelectedIndices(selected.stream().mapToInt(Integer::intValue).toArray());
+            results.ensureIndexIsVisible(results.getSelectedIndex());
+        }
+        pages.show(contents, hits.isEmpty() ? "empty" : "results");
+    }
+
     private void refresh(String summary) {
-        String needle = query.getText();
-        var field = (SearchIndex.Scope) scope.getSelectedItem();
-        var matchMode = (SearchIndex.Mode) mode.getSelectedItem();
-        busy(true, "색인 확인 및 검색 중…");
-        new SwingWorker<List<Library.Hit>, Void>() {
-            protected List<Library.Hit> doInBackground() throws Exception { return SearchIndex.search(library, needle, field, matchMode, LIMIT); }
+        searchCached(new SearchRequest(query.getText(), (SearchIndex.Scope) scope.getSelectedItem(),
+                (SearchIndex.Mode) mode.getSelectedItem(), false), summary);
+    }
+
+    private void refreshBrokenOcr(String summary) {
+        searchCached(new SearchRequest("", SearchIndex.Scope.IMAGE, SearchIndex.Mode.PHRASE, true), summary);
+    }
+
+    private void cancelSearch() {
+        var previous = searchWorker;
+        searchWorker = null;
+        if (previous != null) previous.cancel(true);
+    }
+
+    private void searchCached(SearchRequest request, String summary) {
+        cancelSearch();
+        lastSearch = request;
+        lastSearchSummary = summary;
+        status.setToolTipText(null);
+        status.setText(request.brokenOcr() ? "OCR 깨짐 의심 목록을 찾는 중…" : "색인된 문서를 검색하는 중…");
+        searchWorker = new SwingWorker<>() {
+            protected List<Library.Hit> doInBackground() throws Exception {
+                return request.brokenOcr() ? SearchIndex.suspectedOcrCached(library, LIMIT + 1)
+                        : SearchIndex.searchCached(library, request.needle(), request.scope(), request.mode(), LIMIT);
+            }
+
             protected void done() {
-                busy(false, "");
                 try {
-                    var hits = get(); activeWords = matchMode.words(needle); model.clear(); model.addAll(hits);
-                    if (!hits.isEmpty()) results.setSelectedIndex(0);
-                    boolean all = needle.isBlank();
-                    count.setText((all ? "문서 목록" : "검색 결과")+"   "+hits.size()+(hits.size()==LIMIT?"+":""));
-                    showImport = all && hits.isEmpty();
-                    emptyTitle.setText(showImport ? "첫 문서를 추가하세요" : "검색 결과가 없습니다");
-                    emptyHint.setText(showImport ? "PowerPoint·Excel 파일이나 폴더를 이곳에 끌어오세요." : "검색어를 줄이거나 전체 문서 목록을 확인하세요.");
-                    emptyButton.setText(showImport ? "파일 선택" : "전체 문서 보기");
-                    pages.show(contents,hits.isEmpty()?"empty":"results");
-                    status.setText(summary + (hits.isEmpty() ? "Ctrl+F 검색창으로 이동" : "Ctrl+F 검색창으로 이동     ·     결과를 두 번 클릭하면 원본 열기"));
-                } catch (Exception e) { error(e); }
+                    if (searchWorker != this) return;
+                    searchWorker = null;
+                    var hits = get();
+                    displaySearch(request, hits, summary);
+                } catch (Exception e) {
+                    status.setText("색인에서 검색하지 못했습니다.");
+                    status.setToolTipText(e.getCause() == null ? e.toString() : e.getCause().toString());
+                } finally {
+                    if (!startupSyncStarted) startIndexSync();
+                }
+            }
+        };
+        searchWorker.execute();
+    }
+
+    private void displaySearch(SearchRequest request, List<Library.Hit> hits, String summary) {
+        var previous = request.equals(displayedSearch) ? results.getSelectedValuesList() : List.<Library.Hit>of();
+        displayedSearch = request;
+        if (request.brokenOcr()) {
+            var displayed = hits.subList(0, Math.min(hits.size(), LIMIT));
+            setResultView(ResultView.BROKEN_OCR);
+            activeWords = List.of();
+            showImport = false;
+            count.setText("OCR 깨짐 의심   " + displayed.size() + (hits.size() > LIMIT ? "+" : ""));
+            emptyTitle.setText("재인식할 그림이 없습니다");
+            emptyHint.setText("현재 색인에서 깨짐이 의심되는 글자 인식 결과를 찾지 못했습니다.");
+            emptyButton.setText("전체 문서 보기");
+            showHits(displayed, previous);
+            status.setText(summary + (displayed.isEmpty() ? " " : "Ctrl·Shift로 여러 그림을 선택할 수 있습니다."));
+            return;
+        }
+        boolean pictures = request.scope() == SearchIndex.Scope.IMAGE;
+        boolean all = request.needle().isBlank();
+        setResultView(pictures ? ResultView.PICTURE : ResultView.DOCUMENT);
+        activeWords = request.mode().words(request.needle());
+        count.setText((pictures ? "그림 결과" : all ? "문서 목록" : "검색 결과") + "   "
+                + hits.size() + (hits.size() == LIMIT ? "+" : ""));
+        showImport = !pictures && all && hits.isEmpty();
+        boolean indexing = !startupSyncStarted || indexWorker != null;
+        String emptyHeading = indexing ? "색인된 문서가 아직 없습니다" : "첫 문서를 추가하세요";
+        emptyTitle.setText(showImport ? emptyHeading : "검색 결과가 없습니다");
+        emptyHint.setText(showImport ? "PowerPoint·Excel 파일이나 폴더를 이곳에 끌어오세요."
+                : pictures ? "검색어를 줄이거나 기존 PPTX·XLSX를 다시 추가해 보세요."
+                : "검색어를 줄이거나 전체 문서 목록을 확인하세요.");
+        emptyButton.setText(showImport ? "파일 선택" : "전체 문서 보기");
+        showHits(hits, previous);
+        status.setText(summary + (hits.isEmpty() ? "Ctrl+F 검색창으로 이동"
+                : "Ctrl+F 검색창으로 이동     ·     결과를 두 번 클릭하면 원본 열기"));
+    }
+
+    private void startIndexSync() {
+        if (indexWorker != null) return;
+        startupSyncStarted = true;
+        syncIndex.setEnabled(false);
+        indexStatus.setToolTipText(null);
+        indexStatus.setText("색인 확인 중…");
+        indexWorker = new SwingWorker<>() {
+            private boolean readFirstSnapshot;
+            private SearchIndex.Progress latest = new SearchIndex.Progress(0, 0, 0);
+
+            protected Void doInBackground() throws Exception {
+                SearchIndex.synchronize(library, this::publish);
+                return null;
+            }
+
+            protected void process(List<SearchIndex.Progress> updates) {
+                latest = updates.getLast();
+                indexStatus.setText(indexProgressText("색인 확인 중", latest));
+                if (!readFirstSnapshot && latest.updated() > 0 && model.isEmpty()
+                        && !working && searchWorker == null && lastSearch != null) {
+                    readFirstSnapshot = true;
+                    searchCached(lastSearch, lastSearchSummary);
+                }
+            }
+
+            protected void done() {
+                indexWorker = null;
+                syncIndex.setEnabled(!working);
+                try {
+                    get();
+                    indexStatus.setText(indexProgressText("색인 확인 완료", latest));
+                } catch (Exception e) {
+                    indexStatus.setText("일부 문서의 색인 확인을 완료하지 못했습니다.");
+                    indexStatus.setToolTipText(e.getCause() == null ? e.toString() : e.getCause().toString());
+                }
+                if (!working && lastSearch != null) searchCached(lastSearch, lastSearchSummary);
+            }
+        };
+        indexWorker.execute();
+    }
+
+    private static String indexProgressText(String label, SearchIndex.Progress latest) {
+        return label + " · 확인 " + latest.checked() + "건 · 갱신 " + latest.updated()
+                + "건 · 제거 " + latest.removed() + "건";
+    }
+
+    private void searchAfterWork(String summary) {
+        busy(false, summary);
+        if (lastSearch != null) searchCached(lastSearch, summary);
+        else refresh(summary);
+    }
+
+    private void repairSelectedOcr() {
+        var selected = results.getSelectedValuesList().stream().filter(hit -> hit.picture() != null).toList();
+        if (resultView == ResultView.DOCUMENT || working || selected.isEmpty()) return;
+        var documents = new LinkedHashMap<Path, List<Library.Hit>>();
+        for (var hit : selected) documents.computeIfAbsent(hit.md(), ignored -> new ArrayList<>()).add(hit);
+        busy(true, "PaddleOCR 준비 중…");
+        new SwingWorker<Void, RepairProgress>() {
+            private int updated;
+            private int processed;
+            private int failed;
+            private int indexFailures;
+            private final List<String> failures = new ArrayList<>();
+
+            protected Void doInBackground() throws Exception {
+                ImageOcr.validate(ImageOcr.Mode.PADDLE);
+                var changed = new ArrayList<Path>();
+                try (var paddle = new ImageOcr(ImageOcr.Mode.PADDLE, ImageOcr.scripts())) {
+                    for (var hits : documents.values()) {
+                        String title = hits.getFirst().title();
+                        publish(new RepairProgress(processed, title));
+                        try {
+                            int replacements = OcrRepair.repair(library, hits, paddle);
+                            updated += replacements;
+                            if (replacements > 0) changed.add(hits.getFirst().md());
+                        } catch (IOException e) {
+                            failures.add(title + "\n" + e.getMessage());
+                            failed += hits.size();
+                        }
+                        processed += hits.size();
+                    }
+                } finally {
+                    if (!changed.isEmpty()) {
+                        publish(new RepairProgress(processed, "변경된 문서 색인 중"));
+                        try {
+                            indexFailures = changed.size() - SearchIndex.indexCompleted(library, changed);
+                        } catch (IOException e) {
+                            indexFailures = changed.size();
+                            failures.add("변경된 문서 색인을 완료하지 못했습니다.\n" + e.getMessage());
+                        }
+                    }
+                }
+                return null;
+            }
+
+            protected void process(List<RepairProgress> updates) {
+                var latest = updates.getLast();
+                showProgress(latest.processed(), selected.size(),
+                        "PaddleOCR 재인식 " + latest.processed() + "/" + selected.size() + " · " + latest.title());
+            }
+
+            protected void done() {
+                try { get(); }
+                catch (Exception e) { error(e); }
+                showNotices(failures, "OCR 재인식 알림");
+                if (processed == 0) {
+                    busy(false, "PaddleOCR 재인식을 시작하지 못했습니다.");
+                } else {
+                    String indexIssues = indexFailures > 0 ? " · 색인 미반영 " + indexFailures + "건" : "";
+                    String summary = "재인식 " + updated + "건 · 기존 결과 유지 " + (processed - updated - failed)
+                            + "건 · 실패 " + failed + "건" + indexIssues + "     ";
+                    searchAfterWork(summary);
+                }
             }
         }.execute();
+    }
+
+    private record RepairProgress(int processed, String title) {}
+
+    private void showProgress(long done, long total, String text) {
+        progress.setIndeterminate(false);
+        int percent = total == 0 ? 100 : (int) (100.0 * done / total);
+        progress.setValue(percent);
+        progress.setString(done + " / " + total + " (" + percent + "%)");
+        progress.setStringPainted(true);
+        status.setToolTipText(text);
+        status.setText(text);
+    }
+
+    private void showNotices(List<String> messages, String title) {
+        if (messages.isEmpty()) return;
+        JTextArea log = new JTextArea(String.join("\n\n", messages), 10, 54);
+        log.setEditable(false);
+        log.setLineWrap(true);
+        log.setCaretPosition(0);
+        JOptionPane.showMessageDialog(frame, new JScrollPane(log), title, JOptionPane.WARNING_MESSAGE);
     }
 
     private void choose(boolean directory) {
@@ -363,6 +784,7 @@ public final class OfficeMarkdown {
     }
 
     private void importFiles(List<java.io.File> inputs) {
+        if (working || inputs.isEmpty()) return;
         var engine=(ImageOcr.Mode)ocrMode.getSelectedItem();
         try { ImageOcr.validate(engine); } catch(IOException e) { error(e); return; }
         if(engine==ImageOcr.Mode.VISION && JOptionPane.showConfirmDialog(frame,
@@ -370,51 +792,42 @@ public final class OfficeMarkdown {
                 System.getenv().getOrDefault("OPENAI_BASE_URL","https://api.openai.com/v1")+
                 "\n모델: "+System.getenv("OFFICEMD_VISION_MODEL")+"\n계속할까요?",
                 "비전 OCR",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION) return;
-        busy(true, "변환 준비 중…");
-        new SwingWorker<Void, String>() {
-            int converted;
-            final List<String> failures = new ArrayList<>();
-            void convert(Path path, ImageOcr ocr) {
-                publish(path.getFileName().toString());
-                try {
-                    if (ocr!=null) ocr.warnings.clear();
-                    Library.convert(path, library,ocr); converted++;
-                    if (ocr!=null && !ocr.warnings.isEmpty())
-                        failures.add(path+" · 변환 완료, 일부 그림 OCR 생략\n"+String.join("\n",ocr.warnings));
-                }
-                catch (Exception e) { failures.add(path + "\n" + e); }
+        boolean reconvert = reconvertSameName.isSelected();
+        int workers = (Integer) conversionWorkers.getSelectedItem();
+        var paths = inputs.stream().map(java.io.File::toPath).toList();
+        busy(true, "변환할 파일을 찾는 중…");
+        new SwingWorker<BatchConversion.Result, BatchConversion.Progress>() {
+            protected BatchConversion.Result doInBackground() throws Exception {
+                return BatchConversion.run(paths, library, reconvert, engine, workers, this::publish);
             }
-            protected Void doInBackground() throws Exception {
-                try (var ocr=engine==ImageOcr.Mode.OFF ? null : new ImageOcr(engine,ImageOcr.scripts())) {
-                    convertInputs(ocr);
-                }
-                return null;
-            }
-            void convertInputs(ImageOcr ocr) {
-                for (var input : inputs) {
-                    if (!input.isDirectory()) { convert(input.toPath(),ocr); continue; }
-                    try {
-                        Files.walkFileTree(input.toPath(), new SimpleFileVisitor<>() {
-                            public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) {
-                                if (attrs.isRegularFile() && Library.supported(path)) convert(path,ocr);
-                                return FileVisitResult.CONTINUE;
-                            }
-                            public FileVisitResult visitFileFailed(Path path, IOException e) {
-                                failures.add(path + "\n" + e); return FileVisitResult.CONTINUE;
-                            }
-                        });
-                    } catch (IOException e) { failures.add(input + "\n" + e); }
+            protected void process(List<BatchConversion.Progress> updates) {
+                var latest = updates.getLast();
+                if (latest.phase() == BatchConversion.Phase.SCANNING) {
+                    String phase = "기존 변환 확인".equals(latest.current()) ? "기존 변환 확인 중" : "파일 찾는 중";
+                    status.setText(phase + " · 확인 " + latest.scanned() + "개 · 변환 대상 " + latest.total() + "개");
+                } else {
+                    String current = latest.current() == null || latest.current().isBlank() ? "" : " · " + latest.current();
+                    String parallel = (workers == AUTOMATIC_WORKERS ? "자동 동시 한도 " : "동시 한도 ") + latest.workers();
+                    showProgress(latest.processed(),latest.total(),"변환 중 · 완료 " + latest.converted()
+                            + " · 건너뜀 " + latest.skipped() + " · 실패 " + latest.failed()
+                            + " · 색인 " + latest.indexed() + " · " + parallel + current);
                 }
             }
-            protected void process(List<String> names) { status.setText("변환 중 · " + names.getLast()); }
             protected void done() {
-                try { get(); } catch (Exception e) { error(e); }
-                if (!failures.isEmpty()) {
-                    JTextArea log = new JTextArea(String.join("\n\n", failures), 10, 54);
-                    log.setEditable(false); log.setLineWrap(true);
-                    JOptionPane.showMessageDialog(frame, new JScrollPane(log), "변환 및 OCR 알림 " + failures.size() + "건", JOptionPane.WARNING_MESSAGE);
+                try {
+                    var result = get();
+                    long notices = result.failed() + result.scanFailures() + result.warnings() + result.indexFailures();
+                    showNotices(result.details(),"변환 및 OCR 알림 " + notices + "건");
+                    String scanIssues = result.scanFailures()==0 ? "" : " · 탐색 오류 " + result.scanFailures() + "건";
+                    String indexIssues = result.indexFailures()==0 ? "" : " · 색인 오류 " + result.indexFailures() + "건";
+                    String summary = "변환 " + result.converted() + "건 · 건너뜀 " + result.skipped()
+                            + "건 · 실패 " + result.failed() + "건 · 색인 " + result.indexed() + "건"
+                            + scanIssues + indexIssues + "     ";
+                    searchAfterWork(summary);
+                } catch (Exception e) {
+                    error(e);
+                    busy(false, "변환 작업이 중단됐습니다.");
                 }
-                refresh("변환 " + converted + "건 · ");
             }
         }.execute();
     }

@@ -66,7 +66,7 @@ final class LibraryStyle {
         };
     }
 
-    static ListCellRenderer<Library.Hit> renderer() {
+    static ListCellRenderer<Library.Hit> renderer(java.util.function.Function<Library.Hit,Icon> thumbnails) {
         return (list, hit, index, selected, focus) -> {
             JPanel row = panel(new BorderLayout(12,0), 10);
             row.setOpaque(true);
@@ -75,10 +75,13 @@ final class LibraryStyle {
                     BorderFactory.createMatteBorder(0,selected?3:0,1,0,selected?PURPLE:LINE),
                     new EmptyBorder(9,selected?9:12,9,10)));
             boolean excel = hit.source().getFileName().toString().toLowerCase(java.util.Locale.ROOT).matches(".*\\.xlsx?");
-            row.add(new JLabel(document(excel?"X":"P",38,excel?new Color(0x24765D):new Color(0xB95331))),BorderLayout.WEST);
+            Icon thumbnail = thumbnails.apply(hit);
+            if (thumbnail == null) thumbnail = document(excel?"X":"P",38,excel?new Color(0x24765D):new Color(0xB95331));
+            row.add(new JLabel(thumbnail),BorderLayout.WEST);
             JPanel text = panel(new GridLayout(2,1),0);
             text.add(label(hit.title(),14,true,INK));
-            text.add(label(hit.section()+"   "+hit.excerpt(),12,false,MUTED));
+            String detail = hit.picture() == null ? hit.section() : hit.picture().location();
+            text.add(label(detail+"   "+hit.excerpt().replaceAll("\\R"," "),12,false,MUTED));
             row.add(text);
             return row;
         };
