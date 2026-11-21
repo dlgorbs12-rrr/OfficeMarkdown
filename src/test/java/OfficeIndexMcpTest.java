@@ -48,5 +48,15 @@ class OfficeIndexMcpTest {
         var evidence=server.call("read_evidence",json("{'document':'1','query':'🔵a'}"));
         assertTrue(OfficeIndexMcp.JSON.toJson(evidence).contains("CAFÉ 🔵A"));
     }
+    @Test void chatDiscoversToolsWithAnEmptyLibraryAndReportsFailedSearch() throws Exception {
+        Files.writeString(root.resolve("config"),OfficeIndexMcp.JSON.toJson(Map.of("root",root.toString())));
+        var activity=Files.createFile(root.resolve("activity"));
+        var server=new OfficeIndexMcp(root);
+        assertTrue(Files.readString(activity).isEmpty());
+        server.respond(json("{'method':'tools/list'}"));
+        var result=server.respond(json("{'method':'tools/call','params':{'name':'search','arguments':{'field':'title','query':'demo'}}}"));
+        assertEquals(true,((Map<?,?>)result).get("isError"));
+        assertEquals(List.of("tools/list","search · 실패"),Files.readAllLines(activity));
+    }
     private static JsonObject json(String text){return JsonParser.parseString(text).getAsJsonObject();}
 }

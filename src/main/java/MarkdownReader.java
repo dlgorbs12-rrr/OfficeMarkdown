@@ -104,19 +104,41 @@ final class MarkdownReader {
         return html(page,picture,null);
     }
 
-    static String html(Page page,PictureAssets.Reference picture,Path note) {
+    private static String renderMarkdown(String source){
         var extensions=List.of(TablesExtension.create());
         var parser=Parser.builder().extensions(extensions).build();
         var renderer=HtmlRenderer.builder().extensions(extensions).softbreak("<br>").escapeHtml(true).build();
+        return renderer.render(parser.parse(source)).replace("&lt;br&gt;","<br>");
+    }
+
+    private static Safelist allowedTags(){
+        return new Safelist().addTags("p","h1","h2","h3","h4","h5","h6","strong","em","code","pre",
+                "blockquote","ul","ol","li","table","thead","tbody","tr","td","th","br","hr");
+    }
+
+    static String chatHtml(String text,Set<String> citations){
+        String clean=Jsoup.clean(renderMarkdown(text),allowedTags());
+        // Only the app's verified, turn-local evidence IDs become links.
+        var pattern=java.util.regex.Pattern.compile("(?s)<pre>.*?</pre>|<code>.*?</code>|\\[(E[1-9][0-9]{0,4})\\]");
+        String body=pattern.matcher(clean).replaceAll(match->{
+            String id=match.group(1);
+            if(id==null || !citations.contains(id))return java.util.regex.Matcher.quoteReplacement(match.group());
+            return "<sup><a href='#"+id+"'>"+id.substring(1)+"</a></sup>";
+        });
+        return "<html><head><style>body{font-family:'Malgun Gothic';font-size:12pt;color:#302a24;margin:0}"
+                +"h1,h2,h3{margin-top:12px;margin-bottom:6px} p,ul,ol{margin-top:5px;margin-bottom:8px}"
+                +"a{color:#586846} td,th{padding:5px 12px;border-bottom:1px solid #ded8cf} th{background-color:#f1ece3}"
+                +"pre,code{background-color:#f3eee5}</style></head><body>"+body+"</body></html>";
+    }
+
+    static String html(Page page,PictureAssets.Reference picture,Path note) {
         String source = page.source();
         String marker = null;
         if (picture != null && containsPicture(page,picture)) {
             marker = "OfficePictureAnchor" + UUID.randomUUID().toString().replace("-", "");
             source = ("\n" + source).replace("\n" + PictureAssets.markdownLine(picture) + "\n", "\n" + marker + "\n" + PictureAssets.markdownLine(picture) + "\n").substring(1);
         }
-        String rendered=renderer.render(parser.parse(source)).replace("&lt;br&gt;","<br>");
-        var allowed=new Safelist().addTags("p","h1","h2","h3","h4","h5","h6","strong","em","code","pre",
-                "blockquote","ul","ol","li","table","thead","tbody","tr","td","th","br","hr");
+        String rendered=renderMarkdown(source);
         var trusted=new HashMap<String,String>();
         if(note!=null){
             var parsed=Jsoup.parseBodyFragment(rendered);
@@ -134,7 +156,7 @@ final class MarkdownReader {
             }
             rendered=parsed.body().html();
         }
-        String safe = Jsoup.clean(rendered,allowed);
+        String safe = Jsoup.clean(rendered,allowedTags());
         for(var image:trusted.entrySet())safe=safe.replace(image.getKey(),image.getValue());
         if (marker != null) safe = safe.replace(marker, "<a name='" + PICTURE_ANCHOR + "'></a>");
         return "<html><head><style>body {font-family:'Malgun Gothic';font-size:12pt;color:#302b40;margin:14px}"

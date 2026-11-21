@@ -24,21 +24,30 @@ final class AgentConnection {
     }
     static String model(DocumentAgent.Provider p){return PREF.get("model."+p.name(),"");}
     static void model(DocumentAgent.Provider p,String id){PREF.put("model."+p.name(),id);}
-    static List<String> models(DocumentAgent.Provider p){
-        Set<String> options=new LinkedHashSet<>();
+    record Model(String id,String name,String description) {}
+    static List<Model> models(DocumentAgent.Provider p){
+        var options=new LinkedHashMap<String,Model>();
         if(p==DocumentAgent.Provider.CODEX){
             String home=System.getenv("CODEX_HOME");
             Path folder=home==null || home.isBlank()?Path.of(System.getProperty("user.home"),".codex"):Path.of(home);
             try(var reader=Files.newBufferedReader(folder.resolve("models_cache.json"))){
                 for(var entry:JsonParser.parseReader(reader).getAsJsonObject().getAsJsonArray("models")){
                     var m=entry.getAsJsonObject();
-                    if("list".equals(m.get("visibility").getAsString())) options.add(m.get("slug").getAsString());
+                    if(!"list".equals(m.get("visibility").getAsString()))continue;
+                    String id=m.get("slug").getAsString();
+                    String name=m.has("display_name") && m.get("display_name").isJsonPrimitive()
+                            ? m.get("display_name").getAsString() : id;
+                    String description=m.has("description") && m.get("description").isJsonPrimitive()
+                            ? m.get("description").getAsString() : "";
+                    options.put(id,new Model(id,name,description));
                 }
             }catch(IOException | RuntimeException ignored){/* Custom IDs work without a catalog. */}
-        }else if(p==DocumentAgent.Provider.CLAUDE) options.addAll(List.of("sonnet","opus","haiku"));
+        }else if(p==DocumentAgent.Provider.CLAUDE){
+            for(String id:List.of("sonnet","opus","haiku"))options.put(id,new Model(id,id,""));
+        }
         String saved=model(p);
-        if(!saved.isEmpty())options.add(saved);
-        return List.copyOf(options);
+        if(!saved.isEmpty())options.putIfAbsent(saved,new Model(saved,saved,""));
+        return List.copyOf(options.values());
     }
     static String override(DocumentAgent.Provider p){return PREF.get("exe."+p.name(),"");}
     static void path(DocumentAgent.Provider p,Path file) throws IOException {

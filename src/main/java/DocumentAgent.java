@@ -70,6 +70,10 @@ final class DocumentAgent {
         return invoke(provider,model,effort,prompt,List.of());
     }
     static String invoke(Provider provider,String model,Effort effort,String prompt,List<String> options) throws Exception {
+        return invoke(provider,model,effort,prompt,options,()->{});
+    }
+    interface Progress { void poll() throws IOException; }
+    static String invoke(Provider provider,String model,Effort effort,String prompt,List<String> options,Progress progress) throws Exception {
         var cmd=new ArrayList<String>(); cmd.add(provider.executable().toString());
         switch(provider){
             case CODEX -> cmd.addAll(List.of("exec","--ephemeral","--skip-git-repo-check","--sandbox","read-only","--ignore-user-config",
@@ -94,7 +98,12 @@ final class DocumentAgent {
             try(var stream=proc.getOutputStream()){
                 if(provider!=Provider.COPILOT) stream.write(prompt.getBytes(StandardCharsets.UTF_8));
             }
-            if(!proc.waitFor(150,TimeUnit.SECONDS)) throw new IOException(provider+" 응답 시간 초과");
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(150);
+            while(!proc.waitFor(300,TimeUnit.MILLISECONDS)){
+                progress.poll();
+                if(System.nanoTime()>=deadline)throw new IOException(provider+" 응답 시간 초과");
+            }
+            progress.poll();
             if(proc.exitValue()!=0) {
                 String details=(Files.readString(err)+"\n"+Files.readString(out)).strip();
                 String hint=effort==Effort.DEFAULT ? "CLI 로그인과 사용 한도를 확인하세요." : "현재 모델의 추론 깊이 지원 여부와 CLI 상태를 확인하세요.";

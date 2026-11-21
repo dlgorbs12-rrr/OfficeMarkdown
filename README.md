@@ -8,7 +8,7 @@ Windows x64에서 **PowerShell**을 열고 아래 명령을 실행하세요. 최
 
 ```powershell
 $setup = Join-Path $env:TEMP ("OfficeMarkdown-{0}.ps1" -f [guid]::NewGuid())
-Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri 'https://raw.githubusercontent.com/dlgorbs12-rrr/OfficeMarkdown/v3.0.0/install.ps1' -OutFile $setup
+Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri 'https://raw.githubusercontent.com/dlgorbs12-rrr/OfficeMarkdown/v3.0.1/install.ps1' -OutFile $setup
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
@@ -23,7 +23,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
    |---|---|
    | **키워드 검색** | `결과점검 체크리스트`처럼 제목이나 본문의 단어를 입력합니다. |
    | **이미지 검색** | `영구 삭제 사유 입력`처럼 화면에 보이는 문구나 그림 설명을 입력합니다. |
-   | **에이전트 검색** | “착수보고서에 넣을 작업 일정표를 찾아줘”라고 질문하고 추천 근거와 출처를 확인합니다. 처음에는 **에이전트 연결 설정**에서 지원 CLI를 연결하고 로그인하세요. |
+   | **에이전트 대화** | 연결한 AI와 대화합니다. 문서 작업을 요청하면 AI가 Office MCP를 호출하며, 대화에서 도구 사용 내역과 인용 출처를 확인할 수 있습니다. 처음에는 **에이전트 연결 설정**에서 지원 CLI를 연결하고 로그인하세요. |
 
 3. 결과를 선택하면 해당 슬라이드·시트·페이지를 읽을 수 있습니다. 원래 파일은 **원본 열기**로 엽니다.
 

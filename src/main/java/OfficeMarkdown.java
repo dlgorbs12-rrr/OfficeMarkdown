@@ -19,7 +19,7 @@ public final class OfficeMarkdown {
     private final JPanel importOptions = LibraryStyle.panel(new GridLayout(0, 1, 0, 6), 4);
     private final JToggleButton keywordMode = new JToggleButton("키워드 검색", true);
     private final JToggleButton imageMode = new JToggleButton("이미지 검색");
-    private final JToggleButton agentMode = new JToggleButton("에이전트 검색");
+    private final JToggleButton agentMode = new JToggleButton("에이전트 대화");
     private final JButton addDocuments = new JButton("문서 추가");
     private final JComboBox<ImageOcr.Mode> ocrMode=new JComboBox<>(ImageOcr.Mode.values());
     private final JFrame frame = new JFrame("검색 보관함 · Office Markdown");
@@ -125,6 +125,8 @@ public final class OfficeMarkdown {
     }
 
     private void show() {
+        var iconUrl = OfficeMarkdown.class.getResource("/OfficeMarkdown.png");
+        if (iconUrl != null) frame.setIconImage(new ImageIcon(iconUrl).getImage());
         var updates = new UpdateDialog(frame, () -> working || indexWorker != null ||
                 (agentDialog != null && agentDialog.isAnswering()),
                 () -> frame.dispatchEvent(new java.awt.event.WindowEvent(frame, java.awt.event.WindowEvent.WINDOW_CLOSING)),
@@ -146,7 +148,7 @@ public final class OfficeMarkdown {
         head.setOpaque(true); head.setBackground(Color.WHITE);
         JButton brand = new JButton("OfficeMarkdown");
         brand.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD,19f));
-        brand.setIcon(LibraryStyle.document("M",32,SearchStudio.CHARCOAL));
+        if (iconUrl != null) brand.setIcon(new ImageIcon(frame.getIconImage().getScaledInstance(32,32,Image.SCALE_SMOOTH)));
         brand.setBorderPainted(false);
         brand.setContentAreaFilled(false);
         brand.setToolTipText("보관함 처음으로");
@@ -217,7 +219,8 @@ public final class OfficeMarkdown {
             button.putClientProperty("JButton.buttonType","roundRect");
             button.putClientProperty("FlatLaf.style","arc: 999; borderWidth: 0; focusWidth: 0; innerFocusWidth: 0;"
                     + " background: #ebe8dc; hoverBackground: #e2ddcc; pressedBackground: #dcd6c2;"
-                    + " selectedBackground: #ffffff; selectedForeground: #25251f; borderColor: #ebe8dc;"
+                    + (button==agentMode?" selectedBackground: #b65612; selectedForeground: #ffffff;":" selectedBackground: #ffffff; selectedForeground: #25251f;")
+                    + " borderColor: #ebe8dc;"
                     + " focusedBorderColor: #ebe8dc");
             button.setMargin(new Insets(6,14,6,14));
             button.setFont(LibraryStyle.TYPE.deriveFont(13f));
@@ -974,7 +977,6 @@ public final class OfficeMarkdown {
         }
         boolean pictures = request.scope() == SearchIndex.Scope.IMAGE;
         boolean all = request.needle().isBlank();
-        if (all && !pictures) agentDialog.setLibraryExamples(hits);
         setResultView(pictures ? ResultView.PICTURE : ResultView.DOCUMENT);
         activeWords = request.mode().words(request.needle());
         count.setText((pictures ? "그림 결과" : all ? "문서 목록" : "검색 결과") + "   "

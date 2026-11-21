@@ -1,4 +1,4 @@
-param([string]$JdkHome)
+param([string]$JdkHome, [switch]$DesktopShortcut)
 
 $ErrorActionPreference = 'Stop'
 $localRoot = Join-Path $PSScriptRoot 'local'
@@ -69,6 +69,27 @@ try {
         [IO.File]::Move($next, $current)
     }
     Write-Host "Installed: $app"
+    if ($DesktopShortcut) {
+        $desktop = [Environment]::GetFolderPath('DesktopDirectory')
+        $linkPath = Join-Path $desktop 'OfficeMarkdown.lnk'
+        $target = Join-Path $PSScriptRoot 'run-local.cmd'
+        $shell = New-Object -ComObject WScript.Shell
+        $link = $shell.CreateShortcut($linkPath)
+        if ((Test-Path -LiteralPath $linkPath) -and $link.TargetPath -ne $target) {
+            $linkPath = Join-Path $desktop 'OfficeMarkdown (local).lnk'
+            $link = $shell.CreateShortcut($linkPath)
+            if ((Test-Path -LiteralPath $linkPath) -and $link.TargetPath -ne $target) {
+                throw "Desktop shortcut name already in use: $linkPath"
+            }
+        }
+        $link.TargetPath = $target
+        $link.WorkingDirectory = $PSScriptRoot
+        $link.IconLocation = "$(Join-Path $PSScriptRoot 'packaging/OfficeMarkdown.ico'),0"
+        $link.WindowStyle = 7
+        $link.Description = 'OfficeMarkdown'
+        $link.Save()
+        Write-Host "Desktop shortcut: $linkPath"
+    }
     Write-Host $usage
 } finally {
     $env:JAVA_HOME = $originalJavaHome
