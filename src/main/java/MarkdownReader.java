@@ -15,6 +15,29 @@ final class MarkdownReader {
 
     static List<Page> read(Path file) throws IOException {
         List<Page> pages=new ArrayList<>();
+        scan(file,page->{ pages.add(page); return false; });
+        return pages;
+    }
+
+    static Page previewPage(Path file, Library.Hit hit) throws IOException {
+        class Selection {
+            Page first, match;
+            boolean accept(Page page) {
+                if (!page.section().equals(hit.section())) return false;
+                if (first==null) first=page;
+                String readable=page.source().replace("<br>"," ").replace("&lt;","<").replace("&gt;",">")
+                        .replace("&amp;","&").replace("\\|","|").replace("\\\\","\\");
+                if (!readable.contains(hit.excerpt())) return false;
+                match=page;
+                return true;
+            }
+        }
+        var selection=new Selection();
+        scan(file,selection::accept);
+        return selection.match!=null ? selection.match : selection.first;
+    }
+
+    private static void scan(Path file, java.util.function.Predicate<Page> stop) throws IOException {
         String section="문서 처음", tableHeader="", divider="", previous="";
         StringBuilder chunk=new StringBuilder();
         int part=1, lines=0;
@@ -26,11 +49,11 @@ final class MarkdownReader {
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException();
                 if ((fileLine == 6 || fileLine == 7) && PictureAssets.generation(line) != null) continue;
                 if (line.startsWith("## ")) {
-                    if (!chunk.isEmpty()) pages.add(new Page(section,part,chunk.toString()));
+                    if (!chunk.isEmpty() && stop.test(new Page(section,part,chunk.toString()))) return;
                     section=line.substring(3); chunk.setLength(0); lines=0; part=1;
                     tableHeader=""; divider="";
                 } else if ((lines>=100 || chunk.length()>32000) && (line.isBlank() || line.startsWith("| "))) {
-                    pages.add(new Page(section,part++,chunk.toString()));
+                    if (stop.test(new Page(section,part++,chunk.toString()))) return;
                     chunk.setLength(0); lines=0;
                     if (line.startsWith("| ") && !divider.isEmpty()) chunk.append(tableHeader).append('\n').append(divider).append('\n');
                 }
@@ -40,8 +63,7 @@ final class MarkdownReader {
                 chunk.append(line).append('\n'); previous=line; lines++;
             }
         }
-        if (!chunk.isEmpty() || pages.isEmpty()) pages.add(new Page(section,part,chunk.toString()));
-        return pages;
+        stop.test(new Page(section,part,chunk.toString()));
     }
 
     static int locate(List<Page> pages,Library.Hit hit) {

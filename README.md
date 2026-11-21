@@ -2,6 +2,8 @@
 
 Windows에서 PowerPoint, Excel, Word, PDF 파일을 검색용 UTF-8 Markdown으로 변환합니다.
 
+Codex, Claude Code, GitHub Copilot에서 보관함을 검색하고 근거를 인용해 문서 초안을 작성할 수 있습니다. [검색 MCP 연결 방법](docs/MCP_CLIENTS.md)
+
 ## 설치하고 첫 문서 찾기
 
 1. **설치하기** — 이 저장소의 **Releases → Assets**에서 Windows x64용 `OfficeMarkdown-버전.msi`를 받아 설치하고, 시작 메뉴에서 **OfficeMarkdown**을 엽니다. Java와 Office를 별도로 설치할 필요는 없습니다.

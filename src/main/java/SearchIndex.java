@@ -10,7 +10,7 @@ import org.sqlite.SQLiteConfig;
 import org.sqlite.SQLiteErrorCode;
 
 final class SearchIndex {
-    private static final String DATABASE = ".office-index-v1.sqlite";
+    static final String DATABASE = ".office-index-v1.sqlite";
     private static final int INDEX_BATCH = 64;
     private static final int WRITER_WAIT_MS = 60_000;
 
@@ -93,11 +93,11 @@ final class SearchIndex {
     }
 
     @FunctionalInterface
-    private interface Query {
-        List<Library.Hit> run(Connection db) throws SQLException;
+    interface Query<T> {
+        List<T> run(Connection db) throws SQLException;
     }
 
-    private static List<Library.Hit> readIndex(Path root, Query query) throws IOException {
+    static <T> List<T> readIndex(Path root, Query<T> query) throws IOException {
         Path database = root.toAbsolutePath().normalize().resolve(DATABASE);
         if (!Files.isRegularFile(database)) return List.of();
         var config = new SQLiteConfig();
@@ -529,6 +529,130 @@ final class SearchIndex {
     private static void add(PreparedStatement stmt, long id, int kind, String section, String text) throws SQLException {
         stmt.setLong(1,id); stmt.setInt(2,kind); stmt.setString(3,section);
         stmt.setString(4,text); stmt.setString(5,text.toLowerCase(Locale.ROOT)); stmt.executeUpdate();
+    }
+
+    record Evidence(int candidate, String term, String field, String quote) {}
+
+    static List<Evidence> evidence(Path library,List<Library.Hit> hits,List<String> terms,boolean includeTitles) throws IOException {
+        if(hits.isEmpty()) return List.of();
+        var candidates=new com.google.gson.JsonArray();
+        for(var hit:hits){
+            var item=new com.google.gson.JsonObject();
+            item.addProperty("md",hit.md().toString()); item.addProperty("section",hit.section());
+            if(hit.picture()!=null)item.addProperty("picture",hit.picture().relativePath());
+            candidates.add(item);
+        }
+        String sql="""
+                WITH candidates AS (
+                    SELECT j.key AS candidate,d.id AS doc,j.value->>'section' AS section,
+                           j.value->>'picture' AS picture FROM json_each(?) j JOIN visible_docs d ON d.md=j.value->>'md'
+                ), words AS (SELECT key AS ord,value AS word FROM json_each(?)),
+                fields AS (
+                    SELECT c.candidate,l.id,l.text,l.folded,
+                           CASE l.kind WHEN 0 THEN '문서명' ELSE '구역 원문' END AS field
+                    FROM candidates c JOIN lines l ON l.doc=c.doc
+                    WHERE c.picture IS NULL AND ((l.kind=2 AND c.section=l.section) OR (? AND l.kind=0))
+                    UNION ALL
+                    SELECT c.candidate,p.id,p.text,p.folded,'그림 OCR'
+                    FROM candidates c JOIN pictures p ON p.doc=c.doc AND p.path=c.picture
+                ), matches AS (
+                    SELECT candidate,ord,word,field,
+                           substr(text,max(1,instr(folded,word)-30),min(30,instr(folded,word)-1)+length(word)+45) AS quote,
+                           row_number() OVER(PARTITION BY candidate,ord,field ORDER BY id) AS choice
+                    FROM fields JOIN words ON instr(folded,word)>0
+                ) SELECT candidate,word,field,quote FROM matches WHERE choice=1 ORDER BY candidate,ord,field
+                """;
+        return readIndex(library,db->{
+            try(var stmt=db.prepareStatement(sql)){
+                stmt.setString(1,candidates.toString());
+                stmt.setString(2,new com.google.gson.Gson().toJson(terms.stream().map(t->t.toLowerCase(Locale.ROOT)).distinct().limit(8).toList()));
+                stmt.setBoolean(3,includeTitles);
+                var rows=new ArrayList<Evidence>();
+                try(var rs=stmt.executeQuery()){
+                    while(rs.next())rows.add(new Evidence(rs.getInt(1),rs.getString(2),rs.getString(3),rs.getString(4)));
+                }
+                return rows;
+            }
+        });
+    }
+
+    static List<DocumentAgent.Claim> pmReferences(Path root,PmReference plan,Focus focus)throws IOException {
+        return readIndex(root,db->plan.search(db,focus));
+    }
+
+    record Focus(Path md, String section) {}
+
+    static List<Library.Hit> focusedDocument(Path root, Focus focus) throws IOException {
+        return readIndex(root, db -> {
+            try(var stmt=db.prepareStatement("SELECT md,source,title,'','' FROM visible_docs WHERE md=?")){
+                stmt.setString(1,focus.md().toString());
+                return results(stmt);
+            }
+        });
+    }
+
+    static List<Library.Hit> agentCandidates(Path library,List<String> terms,boolean pictures,Focus focus) throws IOException {
+        if(focus==null) return agentCandidates(library,terms,pictures);
+        var words=terms.stream().map(w->w.strip().toLowerCase(Locale.ROOT)).filter(w->!w.isEmpty()).distinct().limit(8).toList();
+        if(words.isEmpty())return List.of();
+        return readIndex(library,db->{
+            String table=pictures ? "pictures" : "lines";
+            String target=pictures ? "p.id" : "p.section";
+            String sql="SELECT d.md,d.source,d.title,p.section,substr(p.text,1,2000)"
+                    +(pictures?",p.path,p.location":"")
+                    +" FROM visible_docs d JOIN "+table+" p ON p.doc=d.id JOIN json_each(?) w ON instr(p.folded,w.value)>0"
+                    +" WHERE d.md=? AND (? IS NULL OR p.section=?)"+(pictures?"":" AND p.kind=2")
+                    +" GROUP BY "+target+" ORDER BY count(DISTINCT w.value) DESC,min(p.id) LIMIT 50";
+            try(var stmt=db.prepareStatement(sql)){
+                stmt.setString(1,new com.google.gson.Gson().toJson(words));stmt.setString(2,focus.md().toString());
+                stmt.setString(3,focus.section());stmt.setString(4,focus.section());
+                if(!pictures)return results(stmt);
+                var hits=new ArrayList<Library.Hit>();
+                try(var rs=stmt.executeQuery()){while(rs.next())hits.add(pictureHit(rs));}
+                return hits;
+            }
+        });
+    }
+
+    static List<Library.Hit> agentCandidates(Path library, List<String> terms, boolean pictures) throws IOException {
+        var words = terms.stream().map(w -> w.strip().toLowerCase(Locale.ROOT))
+                .filter(w -> !w.isEmpty()).distinct().limit(8).toList();
+        if (words.isEmpty()) return List.of();
+        return readIndex(library, db -> pictures
+                ? findPictures(db, words, Mode.OR, 50)
+                : findSections(db, words));
+    }
+
+    private static List<Library.Hit> findSections(Connection db, List<String> words) throws SQLException {
+        String sql = """
+                WITH words(word) AS (SELECT value FROM json_each(?)),
+                matches AS (
+                    SELECT l.id,l.doc,l.kind,l.section,w.word FROM words w CROSS JOIN terms
+                    JOIN lines l ON l.id=terms.rowid
+                    WHERE length(w.word)>=3 AND terms MATCH ('"' || replace(w.word,'"','""') || '"')
+                      AND instr(l.folded,w.word)>0 AND l.kind IN (0,2)
+                    UNION ALL
+                    SELECT l.id,l.doc,l.kind,l.section,w.word FROM words w CROSS JOIN lines l
+                    WHERE length(w.word)<3 AND instr(l.folded,w.word)>0 AND l.kind IN (0,2)
+                ), sections AS (
+                    SELECT doc,section,count(DISTINCT word) AS coverage,min(id) AS evidence
+                    FROM matches WHERE kind=2 GROUP BY doc,section
+                ), titles AS (
+                    SELECT doc,count(DISTINCT word) AS coverage FROM matches WHERE kind=0 GROUP BY doc
+                )
+                SELECT d.md,d.source,d.title,s.section,
+                       substr(l.text,max(1,instr(l.folded,m.word)-80),240)
+                FROM sections s JOIN lines l ON l.id=s.evidence
+                JOIN matches m ON m.id=s.evidence JOIN visible_docs d ON d.id=s.doc
+                LEFT JOIN titles t ON t.doc=s.doc
+                GROUP BY s.doc,s.section
+                ORDER BY s.coverage+coalesce(t.coverage,0) DESC,s.coverage DESC,d.title,d.md,s.evidence
+                LIMIT 50
+                """;
+        try (var stmt = db.prepareStatement(sql)) {
+            stmt.setString(1,new com.google.gson.Gson().toJson(words));
+            return results(stmt);
+        }
     }
 
     private static List<Library.Hit> findWords(Connection db, List<String> words, Scope scope, Mode mode, int limit) throws SQLException {

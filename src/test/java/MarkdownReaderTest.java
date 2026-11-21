@@ -14,6 +14,7 @@ class MarkdownReaderTest {
         var hit=new Library.Hit(file,file,"자료","시트 · 일정","| 495 | **검토 495** |");
         int index=MarkdownReader.locate(pages,hit);
         assertTrue(pages.get(index).part()>1);
+        assertEquals(pages.get(index), MarkdownReader.previewPage(file,hit));
         String html=MarkdownReader.html(pages.get(index));
         assertTrue(html.contains("<table ") && html.contains("<strong>검토 495</strong>"),html);
         assertTrue(MarkdownReader.html(pages.getLast()).contains("<li>항목</li>"));

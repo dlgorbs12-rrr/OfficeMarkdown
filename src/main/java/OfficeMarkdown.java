@@ -8,7 +8,10 @@ import java.util.*;
 import java.util.List;
 
 public final class OfficeMarkdown {
-    private final Path library = SearchIndex.defaultLibrary();
+    private final Path library;
+
+    public OfficeMarkdown() { this(SearchIndex.defaultLibrary()); }
+    private OfficeMarkdown(Path library) { this.library = library; }
     private AgentDialog agentDialog;
     private final JComboBox<ImageOcr.Mode> ocrMode=new JComboBox<>(ImageOcr.Mode.values());
     private final JFrame frame = new JFrame("문서 찾기 · Office Markdown");
@@ -72,13 +75,15 @@ public final class OfficeMarkdown {
     private record SearchRequest(String needle, SearchIndex.Scope scope, SearchIndex.Mode mode, boolean brokenOcr) {}
 
     public static void main(String[] args) {
+        Path library = args.length == 2 && args[0].equals("--library")
+                ? Path.of(args[1]).toAbsolutePath().normalize() : SearchIndex.defaultLibrary();
         SwingUtilities.invokeLater(() -> {
             com.formdev.flatlaf.FlatLightLaf.setup();
             UIManager.put("defaultFont", LibraryStyle.TYPE);
             UIManager.put("Component.focusColor", LibraryStyle.PURPLE);
             UIManager.put("TextComponent.arc", 12);
             UIManager.put("Component.arc", 10);
-            new OfficeMarkdown().show();
+            new OfficeMarkdown(library).show();
         });
     }
 
@@ -122,15 +127,19 @@ public final class OfficeMarkdown {
         });
         assistant.addActionListener(e -> {
             if(agentDialog==null || !agentDialog.isDisplayable()) agentDialog=new AgentDialog(frame,library,hit -> {
-            if (working) return;
+            if (working) {
+                JOptionPane.showMessageDialog(agentDialog,"현재 변환이 끝나면 문서 위치를 열 수 있습니다.");
+                return;
+            }
             cancelSearch();
             lastSearch = null;
             displayedSearch = null;
             status.setText("답변 근거");
-            setResultView(ResultView.DOCUMENT);
+            setResultView(hit.picture()==null ? ResultView.DOCUMENT : ResultView.PICTURE);
             model.clear(); activeWords=List.of(hit.excerpt()); model.addElement(hit);
             count.setText("답변 근거"); pages.show(contents,"results"); results.setSelectedIndex(0);
-            },hit -> open(hit,false,false));
+            agentDialog.setVisible(false);frame.toFront();
+            },hit -> open(hit,false,false,agentDialog));
             agentDialog.setVisible(true);agentDialog.toFront();
         });
         for (JButton b : List.of(agentSettings,assistant,shelf,folder,add)) {
@@ -510,6 +519,10 @@ public final class OfficeMarkdown {
     }
 
     private void open(Library.Hit hit, boolean markdown, boolean reveal) {
+        open(hit, markdown, reveal, frame);
+    }
+
+    private void open(Library.Hit hit, boolean markdown, boolean reveal, Component owner) {
         Path file = markdown ? hit.md() : hit.source();
         try {
             if (!Files.isRegularFile(file)) throw new IOException("파일을 찾을 수 없습니다.\n" + file);
@@ -517,7 +530,10 @@ public final class OfficeMarkdown {
             else if (markdown) new ProcessBuilder("notepad.exe", file.toString()).start();
             else if (Library.supported(file)) Desktop.getDesktop().open(file.toFile());
             else throw new IOException("지원하는 원본 문서를 선택하세요.");
-        } catch (Exception ex) { error(ex); }
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(owner,"문서를 열 수 없습니다.\n" + file + "\n" + ex.getLocalizedMessage(),
+                    "문서 열기", JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void error(Exception e) {

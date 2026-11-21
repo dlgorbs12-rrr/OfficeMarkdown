@@ -31,7 +31,10 @@ final class DocumentAgent {
             throw new IOException(label+" CLI를 찾을 수 없습니다. "+exe+".exe를 설치하고 로그인한 뒤 앱을 다시 여세요.");
         }
     }
-    record Claim(String answer,Library.Hit proof) {}
+    record Claim(String answer,Library.Hit proof,List<SearchIndex.Evidence> evidence,List<String> missing,String referenceUse) {
+        Claim(String answer,Library.Hit proof,List<SearchIndex.Evidence> evidence,List<String> missing){this(answer,proof,evidence,missing,"");}
+        Claim(String answer,Library.Hit proof){this(answer,proof,List.of(),List.of());}
+    }
     interface Ask { String run(String prompt) throws Exception; }
 
     enum Effort {
@@ -47,7 +50,7 @@ final class DocumentAgent {
             if(this==DEFAULT)return List.of();
             if(!Arrays.asList(choices(provider)).contains(this))throw new IllegalArgumentException(provider+"에서 제공하지 않는 깊이입니다.");
             String value=name().toLowerCase(Locale.ROOT);
-            return provider==Provider.CODEX ? List.of("-c","model_reasoning_effort="+value) : List.of("--effort",value);
+            return provider==Provider.CODEX ? List.of("-c","model_reasoning_effort="+value) : List.of(provider==Provider.COPILOT?"--reasoning-effort":"--effort",value);
         }
     }
 
@@ -64,14 +67,21 @@ final class DocumentAgent {
         return List.of("--model",model);
     }
     static String invoke(Provider provider,String model,Effort effort,String prompt) throws Exception {
+        return invoke(provider,model,effort,prompt,List.of());
+    }
+    static String invoke(Provider provider,String model,Effort effort,String prompt,List<String> options) throws Exception {
         var cmd=new ArrayList<String>(); cmd.add(provider.executable().toString());
         switch(provider){
             case CODEX -> cmd.addAll(List.of("exec","--ephemeral","--skip-git-repo-check","--sandbox","read-only","--ignore-user-config",
                     "--disable","shell_tool","--disable","multi_agent","--disable","plugins","--disable","apps",
                     "-c","web_search=\"disabled\"","--color","never"));
             case CLAUDE -> cmd.addAll(List.of("-p","--tools","","--strict-mcp-config","--no-session-persistence","--output-format","text"));
-            case COPILOT -> cmd.addAll(List.of("--silent","--no-custom-instructions","--disable-builtin-mcps","--deny-tool","*"));
+            case COPILOT -> {
+                cmd.addAll(List.of("--silent","--no-custom-instructions","--disable-builtin-mcps"));
+                if(options.isEmpty())cmd.addAll(List.of("--deny-tool","*"));
+            }
         }
+        cmd.addAll(options);
         cmd.addAll(modelArguments(model));
         cmd.addAll(effort.arguments(provider));
         if(provider==Provider.CODEX)cmd.add("-");
@@ -102,7 +112,7 @@ final class DocumentAgent {
         }
     }
 
-    private static JsonArray array(String reply) throws IOException {
+    static JsonArray array(String reply) throws IOException {
         String text=reply.strip();
         if(text.startsWith("~~~") || text.startsWith("```")) {
             int nl=text.indexOf('\n'); if(nl>=0) text=text.substring(nl+1).stripTrailing();
@@ -112,7 +122,76 @@ final class DocumentAgent {
         catch(RuntimeException e){throw new IOException("에이전트 응답 형식을 확인할 수 없습니다. 다시 질문해 주세요.",e);}
     }
 
+    static List<Claim> locate(Path library, String question, boolean pictures, Ask agent,
+                              Consumer<String> status) throws Exception {
+        return locate(library,question,pictures,agent,status,null);
+    }
+
+    static List<Claim> locate(Path library,String question,boolean pictures,Ask agent,
+                              Consumer<String> status,SearchIndex.Focus focus) throws Exception {
+        if (question.isBlank() || question.length()>1200) throw new IOException("질문을 1~1200자로 입력하세요.");
+        status.accept("검색 구절 추출 중…");
+        var words = new LinkedHashSet<String>();
+        String target = pictures ? "그림 안에 보일 OCR 문자열" : "문서명과 같은 구역의 본문에서 찾을 구절";
+        String prompt = target + "을 질문에서 최대 6개 추출하세요. 제품명과 정확한 구절을 유지하고 "
+                + "동작 요청은 제외하세요. JSON 문자열 배열만 출력하세요. 질문: " + question;
+        boolean pmQuery=!pictures && PmReference.applicable(question);
+        var plan=array(agent.run(pmQuery ? PmReference.prompt(question) : prompt));
+        if(pmQuery){
+            var reference=plan.isEmpty()?null:PmReference.parse(plan.get(0));
+            if((reference!=null && reference.kind()==PmReference.Kind.SURVEY) ||
+                    (reference==null && PmReference.surveyReference(question)))
+                reference=PmReference.surveyPlan(question,reference);
+            if(reference!=null){
+                status.accept(reference.kind().label+"에서 참고할 구역 찾는 중…");
+                var references=SearchIndex.pmReferences(library,reference,focus);
+                if(!references.isEmpty() || reference.kind()==PmReference.Kind.SURVEY)return references;
+            }
+        }
+        for (var item : plan) {
+            if (!item.isJsonPrimitive() || !item.getAsJsonPrimitive().isString()) continue;
+            String word = item.getAsString().strip();
+            if (!word.isEmpty() && word.length()<=80) words.add(word);
+            if (words.size()==6) break;
+        }
+        // Include common OCR spacing variants without changing the displayed evidence.
+        var originalTerms=List.copyOf(words);
+        if (pictures) {
+            for (String word : List.copyOf(words)) words.add(word.replace(" ", ""));
+        }
+        status.accept("저장된 색인에서 위치 찾는 중…");
+        var searched=List.copyOf(words);
+        var hits=SearchIndex.agentCandidates(library,searched,pictures,focus);
+        if(hits.isEmpty()){
+            var tokens=new LinkedHashSet<String>();
+            for(String word:words) {
+                for(String token:word.split("\\s+")) if(token.length()>=2) tokens.add(token);
+            }
+            if(!tokens.isEmpty() && !tokens.equals(words)){
+                searched=List.copyOf(tokens);
+                hits=SearchIndex.agentCandidates(library,searched,pictures,focus);
+            }
+        }
+        var byHit=SearchIndex.evidence(library,hits,searched,focus==null).stream()
+                .collect(java.util.stream.Collectors.groupingBy(SearchIndex.Evidence::candidate));
+        var claims=new ArrayList<Claim>();
+        for(int i=0;i<hits.size();i++){
+            var hit=hits.get(i);
+            var evidence=byHit.getOrDefault(i,List.of());
+            if(evidence.isEmpty())continue;
+            var missing=originalTerms.stream().filter(term->evidence.stream().noneMatch(e->
+                    e.term().equalsIgnoreCase(term) || pictures && e.term().equalsIgnoreCase(term.replace(" ","")))).toList();
+            String location=hit.picture()==null ? hit.section() : hit.picture().location();
+            claims.add(new Claim(hit.title()+" · "+location,hit,List.copyOf(evidence),missing));
+        }
+        return claims;
+    }
+
     static List<Claim> answer(Path library,String question,Ask agent,Consumer<String> status) throws Exception {
+        return answer(library,question,agent,status,null);
+    }
+
+    static List<Claim> answer(Path library,String question,Ask agent,Consumer<String> status,SearchIndex.Focus focus) throws Exception {
         if(question.isBlank() || question.length()>1200) throw new IOException("질문을 1~1200자로 입력하세요.");
         status.accept("질문에서 검색어 찾는 중…");
         var words=new LinkedHashSet<String>();
@@ -120,9 +199,9 @@ final class DocumentAgent {
             if(!item.isJsonPrimitive() || !item.getAsJsonPrimitive().isString()) continue;
             for(String w:item.getAsString().strip().split("\\s+")) if(!w.isEmpty() && w.length()<=60 && words.size()<8) words.add(w);
         }
-        if(words.isEmpty()) return List.of();
+        if(words.isEmpty() && focus==null) return List.of();
         status.accept("변환된 Markdown에서 근거 찾는 중…");
-        var hits=SearchIndex.search(library,String.join(" ",words),SearchIndex.Scope.ALL,SearchIndex.Mode.OR,120);
+        var hits=focus!=null ? SearchIndex.focusedDocument(library,focus) : SearchIndex.search(library,String.join(" ",words),SearchIndex.Scope.ALL,SearchIndex.Mode.OR,120);
         record Ranked(Library.Hit hit,int score) {}
         List<Ranked> candidates=new ArrayList<>();
         Set<Path> seen=new HashSet<>();
@@ -130,13 +209,13 @@ final class DocumentAgent {
             if(!seen.add(hit.md())) continue;
             if(seen.size()>24) break;
             for(var page:MarkdownReader.read(hit.md())){
-                if(page.section().equals("문서 처음")) continue;
+                if(page.section().equals("문서 처음") || (focus!=null && focus.section()!=null && !focus.section().equals(page.section()))) continue;
                 String source=page.source();
                 // Keep nearby rows together and overlap boundaries for table or slide context.
                 for(int i=0;i<source.length();i+=800){
                     String passage=source.substring(i,Math.min(source.length(),i+1050)).strip();
                     String lower=passage.toLowerCase(Locale.ROOT);
-                    int score=0;
+                    int score=focus==null ? 0 : 1;
                     for(String word:words){
                         String key=word.toLowerCase(Locale.ROOT);
                         if(lower.contains(key)) score+=4;
