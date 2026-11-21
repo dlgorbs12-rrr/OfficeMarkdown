@@ -27,6 +27,36 @@ class PmReferenceTest {
         assertFalse(PmReference.surveyReference("사전조사서에 넣을 WBS 예시 찾아줘"));
     }
 
+    @Test void roleSearchUsesBodySectionAndKeepsManualCorrectionsAcrossReindex()throws Exception{
+        note("예시 착수보고서","## 표지\n추진\n## 사업 범위\n추진 일정과 역할 분담\n");
+        note("예시 가이드","## 절차\n착수보고서 등록 방법\n");
+        var plain=root.resolve("예시 가이드.md");
+        SearchIndex.synchronize(root,p->{});
+        assertEquals("운영 가이드",SearchIndex.documentRole(plain));
+        var plan=new PmReference(PmReference.Kind.KICKOFF,List.of("예시"),List.of("범위"));
+        var found=SearchIndex.pmReferences(root,plan,null);
+        assertEquals(1,found.size());
+        assertEquals("사업 범위",found.getFirst().proof().section());
+        assertTrue(SearchIndex.pmReferences(root,new PmReference(PmReference.Kind.KICKOFF,List.of("타사"),List.of()),null).isEmpty());
+        SearchIndex.setDocumentRole(plain,"착수보고서");
+        Files.writeString(plain,"추가 근거\n",java.nio.file.StandardOpenOption.APPEND);
+        SearchIndex.synchronize(root,p->{});
+        assertEquals(2,SearchIndex.pmReferences(root,plan,null).size());
+        SearchIndex.setDocumentRole(plain,"자동 분류");
+        assertEquals("운영 가이드",SearchIndex.documentRole(plain));
+    }
+
+    @Test void classifiesUnchangedDocumentsInAnOlderIndex()throws Exception{
+        note("중립 제목","## 시트 · 사전조사표\n업무시스템과 인증방식\n");
+        SearchIndex.synchronize(root,p->{});
+        try(var db=java.sql.DriverManager.getConnection("jdbc:sqlite:"+SearchIndex.database());
+            var sql=db.createStatement()){sql.execute("DROP TABLE document_roles");}
+        var progress=new java.util.ArrayList<SearchIndex.Progress>();
+        SearchIndex.synchronize(root,progress::add);
+        assertEquals("사전조사서",SearchIndex.documentRole(root.resolve("중립 제목.md")));
+        assertEquals(0,progress.getLast().updated());
+    }
+
     private void note(String title,String content)throws Exception {
         Files.writeString(root.resolve(title+".md"),"# "+title+"\n\n[원본 파일 열기](<"
                 +root.resolve(title+".xlsx").toUri()+">)\n\n"+content);

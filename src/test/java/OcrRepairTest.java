@@ -19,6 +19,11 @@ class OcrRepairTest {
         var fixture = fixture("깨짐 � 7392", "ㅁㅜㄴ 8241", "정상 문장 9072");
         var hits = OcrRepair.find(fixture.library, 10);
         assertEquals(2, hits.size());
+        var otherOutput = Files.createDirectory(root.resolve("other-output"));
+        var remotePicture = SearchIndex.search(otherOutput, "7392", SearchIndex.Scope.IMAGE, 10).getFirst();
+        assertEquals(fixture.note, remotePicture.md());
+        assertNotNull(PictureAssets.preview(remotePicture.md(), remotePicture.picture(), true));
+        assertEquals(fixture.note, SearchIndex.agentCandidates(otherOutput, List.of("7392"), true).getFirst().md());
         assertEquals(1, OcrRepair.find(fixture.library, 1).size());
         Path oldGeneration = picturePath(fixture.library, hits.getFirst()).getParent();
         byte[] input = Files.readAllBytes(fixture.source);
@@ -74,6 +79,43 @@ class OcrRepairTest {
         String updatedGeneration = updated.lines().map(PictureAssets::generation).filter(Objects::nonNull)
                 .findFirst().orElseThrow();
         assertEquals(original.replace(generation, updatedGeneration).replace("깨짐 �", "새로 인식한 문장"), updated);
+    }
+
+    @Test void wholeDocumentSelectionIncludesPreviouslyRecognizedPictures()throws Exception{
+        var fixture=fixture("기존 한글","깨짐 �");
+        var hits=OcrRepair.documentPictures(fixture.note);
+        assertEquals(2,hits.size());
+        assertEquals(2,OcrRepair.repair(fixture.library,hits,(data,image)->"정밀 한글"));
+        assertTrue(OcrRepair.lowQuality("","페이지 1 · 스캔"));
+        assertFalse(OcrRepair.lowQuality("","슬라이드 1 · 로고"));
+        assertTrue(OcrRepair.lowQuality("계 정 권 한 신 청 절 차","슬라이드 1"));
+        var page=MarkdownReader.read(fixture.note).getLast();
+        assertTrue(MarkdownReader.html(page,null,fixture.note).contains("-preview.png"));
+        assertFalse(MarkdownReader.html(new MarkdownReader.Page("본문",1,"![임의](file:///C:/random.png)"),
+                null,fixture.note).contains("<img"));
+    }
+
+    @Test void searchEnrichmentReusesOnlyIdenticalPicturesAndSurvivesAReindex()throws Exception{
+        var fixture=fixture("새 메일주소 확인");
+        Path second=root.resolve("other");
+        Path note=Library.convert(fixture.source,second);
+        String before=Files.readString(note);
+        SearchIndex.synchronize(fixture.library,p->{});
+        SearchIndex.synchronize(second,p->{});
+        assertEquals(1,PictureSearchIndex.enrich(null,s->{}).reused());
+        assertEquals(0,PictureSearchIndex.enrich(null,s->{}).reused());
+        assertEquals(before,Files.readString(note));
+        var focus=new SearchIndex.Focus(note,null);
+        var hits=SearchIndex.readIndex(db->RelevanceSearch.pictures(db,"메일 주소 확인",10,focus));
+        assertEquals(1,hits.size());
+        assertTrue(hits.getFirst().excerpt().isEmpty());
+        assertEquals("새 메일주소 확인",hits.getFirst().additionalOcr());
+        assertEquals(1,SearchIndex.searchCached(second,"메일 주소 확인",SearchIndex.Scope.IMAGE,SearchIndex.Mode.RELEVANCE,10).size());
+        assertTrue(DocumentAgent.locate(second,"확인 화면 찾아줘",true,p->"[\"메일 주소\",\"확인\"]",s->{},focus)
+                .getFirst().evidence().stream().anyMatch(e->e.quote().contains("메일주소")));
+        Library.convert(fixture.source,second);
+        SearchIndex.synchronize(second,p->{});
+        assertTrue(SearchIndex.readIndex(db->RelevanceSearch.pictures(db,"메일 주소",10,focus)).isEmpty());
     }
 
     private Path picturePath(Path library, Library.Hit hit) {

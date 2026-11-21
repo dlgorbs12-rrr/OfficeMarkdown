@@ -144,8 +144,11 @@ final class DocumentAgent {
                 reference=PmReference.surveyPlan(question,reference);
             if(reference!=null){
                 status.accept(reference.kind().label+"에서 참고할 구역 찾는 중…");
-                var references=SearchIndex.pmReferences(library,reference,focus);
-                if(!references.isEmpty() || reference.kind()==PmReference.Kind.SURVEY)return references;
+                var references=SearchIndex.pmReferences(library,reference,focus,question);
+                if(!references.isEmpty() || reference.kind()!=PmReference.Kind.ADAPTER && reference.kind()!=PmReference.Kind.WBS)
+                    return references;
+            }else if(!plan.isEmpty() && plan.get(0).isJsonObject()){
+                words.addAll(PmReference.strings(plan.get(0).getAsJsonObject(),"topics"));
             }
         }
         for (var item : plan) {
@@ -154,14 +157,21 @@ final class DocumentAgent {
             if (!word.isEmpty() && word.length()<=80) words.add(word);
             if (words.size()==6) break;
         }
-        // Include common OCR spacing variants without changing the displayed evidence.
         var originalTerms=List.copyOf(words);
-        if (pictures) {
-            for (String word : List.copyOf(words)) words.add(word.replace(" ", ""));
-        }
         status.accept("저장된 색인에서 위치 찾는 중…");
+        if(pictures)return locatePictures(originalTerms,focus);
+        // A request such as "RTD 시트" names a section; its indexed heading may be "연동_RTD".
+        for(String word:originalTerms){
+            String name=word.replaceFirst("(?U)\\s+(시트|슬라이드|페이지|장표)$","").strip();
+            if(!name.isEmpty())words.add(name);
+        }
         var searched=List.copyOf(words);
-        var hits=SearchIndex.agentCandidates(library,searched,pictures,focus);
+        List<Library.Hit> hits;
+        if(pmQuery && focus==null){
+            String lookup=String.join(" ",words);
+            searched=RelevanceSearch.words(lookup);
+            hits=SearchIndex.searchCached(library,lookup,SearchIndex.Scope.ALL,SearchIndex.Mode.RELEVANCE,50);
+        }else hits=SearchIndex.agentCandidates(library,searched,false,focus);
         if(hits.isEmpty()){
             var tokens=new LinkedHashSet<String>();
             for(String word:words) {
@@ -180,9 +190,35 @@ final class DocumentAgent {
             var evidence=byHit.getOrDefault(i,List.of());
             if(evidence.isEmpty())continue;
             var missing=originalTerms.stream().filter(term->evidence.stream().noneMatch(e->
-                    e.term().equalsIgnoreCase(term) || pictures && e.term().equalsIgnoreCase(term.replace(" ","")))).toList();
+                    e.term().equalsIgnoreCase(term))).toList();
             String location=hit.picture()==null ? hit.section() : hit.picture().location();
             claims.add(new Claim(hit.title()+" · "+location,hit,List.copyOf(evidence),missing));
+        }
+        return claims;
+    }
+
+    private static List<Claim> locatePictures(List<String> originals,SearchIndex.Focus focus)throws IOException{
+        String lookup=String.join(" ",originals);
+        var hits=SearchIndex.readIndex(db->RelevanceSearch.pictures(db,lookup,50,focus));
+        var claims=new ArrayList<Claim>();
+        var terms=new LinkedHashSet<>(originals);
+        terms.addAll(RelevanceSearch.words(lookup));
+        for(var hit:hits){
+            var evidence=new ArrayList<SearchIndex.Evidence>();
+            String recognized=hit.excerpt().isBlank()?hit.additionalOcr():hit.excerpt();
+            for(var term:terms){
+                String folded=term.toLowerCase(Locale.ROOT);
+                for(var field:List.of(Map.entry("그림 OCR",recognized),Map.entry("그림 설명",hit.imageDescription()))){
+                    String text=field.getValue();
+                    int pos=text.toLowerCase(Locale.ROOT).indexOf(folded);
+                    if(pos>=0)evidence.add(new SearchIndex.Evidence(0,term,field.getKey(),
+                            text.substring(Math.max(0,pos-25),Math.min(text.length(),pos+term.length()+45))));
+                }
+            }
+            if(!evidence.isEmpty()){
+                var missing=originals.stream().filter(t->evidence.stream().noneMatch(e->e.term().equals(t))).toList();
+                claims.add(new Claim(hit.title()+" · "+hit.picture().location(),hit,List.copyOf(evidence),missing));
+            }
         }
         return claims;
     }

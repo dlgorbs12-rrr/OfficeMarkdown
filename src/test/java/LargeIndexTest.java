@@ -50,7 +50,7 @@ class LargeIndexTest {
         SearchIndex.synchronize(library, ignored -> {});
         SearchIndex.configureLarge(library, false, List.of());
         assertFalse(SearchIndex.largeSettings(library).hold());
-        try (var db = java.sql.DriverManager.getConnection("jdbc:sqlite:" + library.resolve(".office-index-v1.sqlite"));
+        try (var db = java.sql.DriverManager.getConnection("jdbc:sqlite:" + SearchIndex.database());
              var q = db.createStatement(); var rows = q.executeQuery("SELECT count(*) FROM large_pending")) {
             assertEquals(0, rows.getInt(1));
         }

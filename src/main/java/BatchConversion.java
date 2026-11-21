@@ -17,7 +17,7 @@ final class BatchConversion {
     }
 
     record Result(long converted, long skipped, long failed, long scanFailures, long warnings, List<String> details,
-                  long indexed, long indexFailures, long deferred, long latestSkipped, boolean cancelled) {}
+                  long indexed, long indexFailures, long deferred, long latestSkipped, boolean cancelled, Path lastMarkdown) {}
 
     @FunctionalInterface
     interface LatestPreviewConfirmation {
@@ -38,6 +38,7 @@ final class BatchConversion {
     private Phase phase = Phase.SCANNING;
     private long scanned, total, converted, skipped, failed, scanFailures, warnings;
     private long indexed, indexFailures, deferred, latestSkipped, pendingSince, lastUpdate;
+    private Path lastMarkdown;
     private int workers = 1;
 
     private BatchConversion(Consumer<Progress> progress) {
@@ -96,7 +97,7 @@ final class BatchConversion {
 
     private Result result(boolean cancelled) {
         return new Result(converted, skipped, failed, scanFailures, warnings, List.copyOf(details), indexed, indexFailures,
-                deferred, latestSkipped, cancelled);
+                deferred, latestSkipped, cancelled,lastMarkdown);
     }
 
     private void checkUnmarkedFiles(LatestVersionSelection versions, Path inventory, long inventoryTotal) throws IOException {
@@ -178,6 +179,7 @@ final class BatchConversion {
                     detail(result.failure());
                 } else {
                     converted++;
+                    lastMarkdown=result.markdown();
                     if (seenNames != null) seenNames.add(job.key());
                     if (unindexed.isEmpty()) pendingSince = System.nanoTime();
                     unindexed.add(result.markdown());

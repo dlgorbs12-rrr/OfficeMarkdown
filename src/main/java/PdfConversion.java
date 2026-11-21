@@ -24,6 +24,7 @@ final class PdfConversion extends PDFTextStripper {
         renderer = new PDFRenderer(document);
         renderer.setSubsamplingAllowed(true);
         setSortByPosition(true);
+        setParagraphEnd("\n\n");
     }
 
     static void write(Path file, Writer markdown, PictureAssets pictures) throws IOException {

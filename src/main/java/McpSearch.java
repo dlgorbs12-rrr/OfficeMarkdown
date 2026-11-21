@@ -16,7 +16,7 @@ final class McpSearch {
     static List<DocumentAgent.Claim> ask(DocumentAgent.Provider provider,Path root,String question,String model,DocumentAgent.Effort effort,
                                           SearchIndex.Focus focus,Consumer<String> status) throws Exception {
         if(question.isBlank() || question.length()>1200)throw new IOException("질문을 1~1200자로 입력하세요.");
-        if(!Files.isRegularFile(root.resolve(SearchIndex.DATABASE)))throw new IOException("먼저 보관함 검색 색인을 만드세요.");
+        if(!Files.isRegularFile(SearchIndex.database()))throw new IOException("먼저 문서를 색인하세요.");
         Path session=Files.createTempDirectory("office-index-mcp-");
         try{
             var config=Map.of("root",root.toAbsolutePath().toString(),"focus",focus==null?"":focus.md().toAbsolutePath().toString(),

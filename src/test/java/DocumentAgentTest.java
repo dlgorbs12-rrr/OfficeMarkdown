@@ -55,6 +55,26 @@ class DocumentAgentTest {
         assertEquals(java.util.List.of("SSO 인증 연동"),hits.get(1).missing());
         assertTrue(AgentDialog.relevanceHtml(hits.getFirst(),false).contains("<b>SSO 인증 연동</b>"));
     }
+    @Test void sheetIdentifierCanMatchInsideACompoundHeading() throws Exception {
+        Path md=lib.resolve("manual.md");
+        Files.writeString(md,"# TIDE 인터페이스 안내\n\n[원본 파일 열기](<"+lib.resolve("a.xlsx").toUri()
+                +">)\n\n## 시트 · 안내\n공통 준비\n## 시트 · 연동_RTD\n측정 대상");
+        SearchIndex.synchronize(lib,p->{});
+        var hits=DocumentAgent.locate(lib,"TIDE의 RTD 시트를 찾아줘",false,
+                p->"[\"TIDE\",\"RTD 시트\"]",s->{});
+        assertFalse(hits.isEmpty());
+        assertEquals("시트 · 연동_RTD",hits.getFirst().proof().section());
+    }
+    @Test void findByTitleWhenNoBodySectionRepeatsIt() throws Exception {
+        Path md=lib.resolve("title.md");
+        Files.writeString(md,"# 오로라 체크인\n\n[원본 파일 열기](<"+lib.resolve("a.pptx").toUri()
+                +">)\n\n## 오전\n공개 장소는 본관입니다.");
+        SearchIndex.synchronize(lib,p->{});
+        var hits=DocumentAgent.locate(lib,"이 문서를 찾아줘",false,p->"[\"오로라 체크인\"]",s->{});
+        assertEquals(1,hits.size());
+        assertEquals(md,hits.getFirst().proof().md());
+        assertEquals("문서명",hits.getFirst().evidence().getFirst().field());
+    }
     @Test void citedAnswerUsesActualMarkdownAndRejectsInventedEvidence() throws Exception{
         Path md=lib.resolve("일정.md");
         Files.writeString(md,"# 출시 계획\n\n[원본 파일 열기](<"+lib.resolve("plan.xlsx").toUri()+">)\n\n## 시트 · 일정\n\n공개 날짜는 12월 14일입니다.\n");

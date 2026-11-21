@@ -336,12 +336,16 @@ final class PictureAssets implements AutoCloseable {
         return localFile(markdown, prefix(key, generation) + MANIFEST);
     }
 
+    static Path previewFile(Path markdown,Reference reference,boolean thumbnail)throws IOException{
+        String generation=referenceGeneration(markdown,reference);
+        if(generation==null)return null;
+        return localFile(markdown,prefix(key(markdown),generation)+reference.number()
+                +(thumbnail?"-thumb.png":"-preview.png"));
+    }
+
     static BufferedImage preview(Path markdown, Reference reference, boolean thumbnail) {
-        String generation = referenceGeneration(markdown, reference);
-        if (generation == null) return null;
         try {
-            Path file = localFile(markdown, prefix(key(markdown), generation) + reference.number()
-                    + (thumbnail ? "-thumb.png" : "-preview.png"));
+            Path file = previewFile(markdown,reference,thumbnail);
             return file == null ? null : ImageIO.read(file.toFile());
         } catch (IOException | RuntimeException ignored) { return null; }
     }

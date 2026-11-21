@@ -25,12 +25,13 @@ final class SearchIndex {
     record LargeSettings(boolean hold, List<HeldNote> pending) {}
 
     enum Mode {
-        PHRASE("정확한 문구"), AND("모두 포함 (AND)"), OR("하나 이상 (OR)");
+        RELEVANCE("관련도순"), PHRASE("정확한 문구"), AND("모두 포함 (AND)"), OR("하나 이상 (OR)");
         private final String label;
         Mode(String label) { this.label = label; }
         public String toString() { return label; }
         List<String> words(String query) {
             String folded = query.strip().toLowerCase(Locale.ROOT);
+            if (this == RELEVANCE) return RelevanceSearch.words(folded);
             if (this == PHRASE || folded.isEmpty()) return List.of(folded);
             return Arrays.stream(folded.split("(?U)\\s+")).filter(s -> !s.isEmpty()).distinct().toList();
         }
@@ -42,9 +43,18 @@ final class SearchIndex {
         public String toString() { return label; }
     }
 
+    private static Path dataDirectory() {
+        String override = System.getProperty("officemd.dataDir");
+        if (override != null) return Path.of(override).toAbsolutePath().normalize();
+        return Path.of(System.getenv().getOrDefault("LOCALAPPDATA", System.getProperty("user.home")), "OfficeMarkdown");
+    }
+
     static Path defaultLibrary() {
-        return Path.of(System.getenv().getOrDefault("LOCALAPPDATA", System.getProperty("user.home")),
-                "OfficeMarkdown", "Markdown");
+        return dataDirectory().resolve("Markdown");
+    }
+
+    static Path database() {
+        return dataDirectory().resolve("Index").resolve(DATABASE);
     }
 
     static List<Library.Hit> search(Path root, String query, Scope scope, int limit) throws IOException {
@@ -53,17 +63,38 @@ final class SearchIndex {
 
     static List<Library.Hit> search(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
-        synchronize(root, ignored -> {});
+        synchronizeAll(root, ignored -> {});
         return searchCached(root, query, scope, mode, limit);
     }
 
     static List<Library.Hit> searchCached(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
-        return readIndex(root, db -> {
-            var words = mode.words(query);
+        return readIndex(db -> {
+            if(mode==Mode.RELEVANCE && !query.isBlank()){
+                return scope==Scope.IMAGE ? RelevanceSearch.pictures(db,query,limit,null)
+                        : RelevanceSearch.text(db,query,scope,limit);
+            }
+            var words = query.isBlank()?List.of(""):mode.words(query);
             if (scope == Scope.IMAGE) return findPictures(db, words, mode, limit);
             if (words.size() <= 1) return find(db, words.isEmpty() ? "" : words.getFirst(), scope, limit);
             return findWords(db, words, scope, mode, limit);
+        });
+    }
+
+    static List<Library.Hit> libraryCards(Path root, int limit) throws IOException {
+        return readIndex(db -> {
+            String sql = """
+                    SELECT d.md, d.source, d.title, coalesce(l.section,'문서'), coalesce(substr(l.text,1,180),'')
+                    FROM (SELECT id,md,source,title FROM visible_docs ORDER BY title,md LIMIT ?) d
+                    LEFT JOIN lines l ON l.id = (SELECT first.id FROM lines first
+                            WHERE first.doc=d.id AND first.kind=2 AND first.text NOT LIKE '## %'
+                            ORDER BY first.id LIMIT 1)
+                    ORDER BY d.title,d.md
+                    """;
+            try (var stmt = db.prepareStatement(sql)) {
+                stmt.setInt(1,limit);
+                return results(stmt);
+            }
         });
     }
 
@@ -75,17 +106,17 @@ final class SearchIndex {
 
     static List<Library.Hit> suspectedOcrCached(Path root, int limit) throws IOException {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
-        return readIndex(root, db -> {
+        return readIndex(db -> {
             String query = """
                 SELECT d.md,d.source,d.title,p.section,p.text,p.path,p.location
                 FROM pictures p JOIN visible_docs d ON d.id=p.doc
-                WHERE p.text<>''
+                WHERE p.text<>'' OR p.location LIKE '% · 스캔'
                 ORDER BY p.id
                 """;
             List<Library.Hit> hits = new ArrayList<>();
             try (var stmt = db.createStatement(); var rs = stmt.executeQuery(query)) {
                 while (hits.size() < limit && rs.next()) {
-                    if (OcrRepair.suspected(rs.getString(5))) hits.add(pictureHit(rs));
+                    if (OcrRepair.lowQuality(rs.getString(5),rs.getString(7))) hits.add(pictureHit(rs));
                 }
             }
             return hits;
@@ -97,8 +128,8 @@ final class SearchIndex {
         List<T> run(Connection db) throws SQLException;
     }
 
-    static <T> List<T> readIndex(Path root, Query<T> query) throws IOException {
-        Path database = root.toAbsolutePath().normalize().resolve(DATABASE);
+    static <T> List<T> readIndex(Query<T> query) throws IOException {
+        Path database = database();
         if (!Files.isRegularFile(database)) return List.of();
         var config = new SQLiteConfig();
         config.setReadOnly(true);
@@ -114,8 +145,27 @@ final class SearchIndex {
             try (var tables = sql.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='large_pending'")) {
                 hasQueue = tables.next();
             }
+            boolean hasRoles;
+            try(var table=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='document_roles'")){
+                hasRoles=table.next();
+            }
+            String role=hasRoles?"coalesce(r.manual,r.inferred,'')":"''";
+            String join=hasRoles?" LEFT JOIN document_roles r ON r.md=d.md":"";
             String predicate = hasQueue ? " WHERE NOT EXISTS (SELECT 1 FROM large_pending p WHERE p.md=d.md)" : "";
-            sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.* FROM main.docs d" + predicate);
+            sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.*,"+role+" AS role FROM main.docs d"+join + predicate);
+            boolean hasPictureText;
+            try(var t=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='picture_search_ocr'")){
+                hasPictureText=t.next();
+            }
+            boolean hasFingerprint;
+            try(var t=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='picture_fingerprints'")){
+                hasFingerprint=t.next();
+            }
+            sql.execute("CREATE TEMP VIEW searchable_pictures AS SELECT p.*,"+
+                    (hasPictureText?"o.text":"NULL")+" AS search_ocr,"+
+                    (hasFingerprint?"f.digest":"NULL")+" AS digest FROM pictures p"+
+                    (hasPictureText?" LEFT JOIN picture_search_ocr o ON o.id=p.id":"")+
+                    (hasFingerprint?" LEFT JOIN picture_fingerprints f ON f.id=p.id":""));
             return query.run(db);
         } catch (SQLException e) {
             throw new IOException("저장된 검색 색인을 열지 못했습니다. " + e.getMessage(), e);
@@ -164,7 +214,7 @@ final class SearchIndex {
                 var missing = new ArrayList<Path>(INDEX_BATCH);
                 for (String path : indexed) {
                     var note = Path.of(path);
-                    if (!library.equals(note.getParent()) || Files.notExists(note) || Files.isDirectory(note)) missing.add(note);
+                    if (library.equals(note.getParent()) && (Files.notExists(note) || Files.isDirectory(note))) missing.add(note);
                 }
                 if (!missing.isEmpty()) {
                     removed += writer.write(missing, true).removed();
@@ -176,6 +226,45 @@ final class SearchIndex {
         } catch (SQLException e) {
             throw new IOException("검색 색인을 갱신하지 못했습니다. " + e.getMessage(), e);
         }
+    }
+
+    static void synchronizeAll(Path output, Consumer<Progress> progress) throws IOException {
+        var folders = new LinkedHashSet<Path>();
+        folders.add(output.toAbsolutePath().normalize());
+        if (Files.isDirectory(defaultLibrary()))
+            folders.add(defaultLibrary());
+        folders.addAll(readIndex(db -> {
+            var known = new ArrayList<Path>();
+            try (var sql = db.createStatement(); var rows = sql.executeQuery("SELECT path FROM folders ORDER BY path")) {
+                while (rows.next()) known.add(Path.of(rows.getString(1)));
+            }
+            return known;
+        }));
+        Progress total = new Progress(0,0,0,0);
+        for (Path folder : folders) {
+            Progress previous = total;
+            Progress[] latest = {previous};
+            synchronize(folder, p -> {
+                latest[0] = new Progress(previous.checked()+p.checked(), previous.updated()+p.updated(),
+                        previous.removed()+p.removed(), previous.deferred()+p.deferred());
+                progress.accept(latest[0]);
+            });
+            total = latest[0];
+        }
+    }
+
+    static void importPreviousIndex(Path output) throws IOException {
+        Path folder = output.toAbsolutePath().normalize();
+        if (!Files.isRegularFile(folder.resolve(DATABASE))) return;
+        var imported = readIndex(db -> {
+            try (var query = db.prepareStatement("SELECT imported FROM folders WHERE path=?")) {
+                query.setString(1, folder.toString());
+                try (var rows = query.executeQuery()) { return rows.next() ? List.of(rows.getInt(1)) : List.<Integer>of(); }
+            }
+        });
+        if (imported.contains(1)) return;
+        try (var writer = new IndexWriter(folder)) { /* Constructor commits the migration. */ }
+        catch (SQLException e) { throw new IOException("기존 검색 색인을 가져오지 못했습니다.", e); }
     }
 
     static int indexCompleted(Path root, List<Path> markdown) throws IOException {
@@ -226,10 +315,11 @@ final class SearchIndex {
     static void configureLarge(Path root, boolean hold, List<Path> allow) throws IOException {
         Path library = Files.createDirectories(root.toAbsolutePath().normalize());
         try (var writer = new IndexWriter(library);
-             var setting = writer.db.prepareStatement("INSERT OR REPLACE INTO library_options VALUES('hold_large',?)");
+             var setting = writer.db.prepareStatement("UPDATE folders SET hold_large=? WHERE path=?");
              var permit = writer.db.prepareStatement("INSERT OR IGNORE INTO large_allowed VALUES(?)")) {
             writer.sql.execute("BEGIN IMMEDIATE");
             setting.setInt(1, hold ? 1 : 0);
+            setting.setString(2, library.toString());
             setting.executeUpdate();
             for (Path file : allow) {
                 Path path = file.toAbsolutePath().normalize();
@@ -250,10 +340,11 @@ final class SearchIndex {
     }
 
     private static void schema(Statement sql) throws SQLException {
-        sql.execute("CREATE TABLE IF NOT EXISTS library_options(name TEXT PRIMARY KEY,value INTEGER NOT NULL)");
+        sql.execute("CREATE TABLE IF NOT EXISTS folders(path TEXT PRIMARY KEY,hold_large INTEGER DEFAULT 1, imported INTEGER DEFAULT 0)");
         sql.execute("CREATE TABLE IF NOT EXISTS large_allowed(md TEXT PRIMARY KEY)");
         sql.execute("CREATE TABLE IF NOT EXISTS large_pending(md TEXT PRIMARY KEY,size INTEGER NOT NULL)");
         sql.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, md TEXT UNIQUE, stamp TEXT, source TEXT, title TEXT)");
+        sql.execute("CREATE TABLE IF NOT EXISTS document_roles(md TEXT PRIMARY KEY,inferred TEXT NOT NULL,manual TEXT)");
         sql.execute("CREATE INDEX IF NOT EXISTS doc_title ON docs(title,md)");
         sql.execute("CREATE TABLE IF NOT EXISTS lines(id INTEGER PRIMARY KEY, doc INTEGER REFERENCES docs ON DELETE CASCADE, kind INTEGER, section TEXT, text TEXT, folded TEXT)");
         sql.execute("CREATE INDEX IF NOT EXISTS doc_lines ON lines(doc)");
@@ -287,7 +378,9 @@ final class SearchIndex {
             this.library = library;
             // indexCompleted receives files already published by a conversion.
             if (!Files.isDirectory(library)) throw new NoSuchFileException(library.toString());
-            db = DriverManager.getConnection("jdbc:sqlite:" + library.resolve(DATABASE));
+            Path database = database();
+            Files.createDirectories(database.getParent());
+            db = DriverManager.getConnection("jdbc:sqlite:" + database);
             try {
                 sql = db.createStatement();
                 sql.execute("PRAGMA busy_timeout=" + WRITER_WAIT_MS);
@@ -295,9 +388,14 @@ final class SearchIndex {
                 enableWal(sql);
                 sql.execute("BEGIN IMMEDIATE");
                 schema(sql);
+                try (var register = db.prepareStatement("INSERT OR IGNORE INTO folders(path) VALUES(?)")) {
+                    register.setString(1, library.toString());
+                    register.executeUpdate();
+                }
+                importLegacy();
                 sql.execute("COMMIT");
                 clearPending = db.prepareStatement("DELETE FROM large_pending WHERE md=?");
-                lookup = db.prepareStatement("SELECT stamp FROM docs WHERE md=?");
+                lookup = db.prepareStatement("SELECT d.stamp,d.id,d.title,r.md FROM docs d LEFT JOIN document_roles r ON r.md=d.md WHERE d.md=?");
                 remove = db.prepareStatement("DELETE FROM docs WHERE md=?");
                 doc = db.prepareStatement("INSERT INTO docs(md,stamp,source,title) VALUES(?,?,?,?) RETURNING id");
                 line = db.prepareStatement("INSERT INTO lines(doc,kind,section,text,folded) VALUES(?,?,?,?,?)");
@@ -305,6 +403,57 @@ final class SearchIndex {
             } catch (SQLException | IOException | RuntimeException e) {
                 try { db.close(); } catch (SQLException close) { e.addSuppressed(close); }
                 throw e;
+            }
+        }
+
+        private void importLegacy() throws SQLException {
+            Path old = library.resolve(DATABASE);
+            if (old.equals(database()) || !Files.isRegularFile(old)) return;
+            try (var check = db.prepareStatement("SELECT imported FROM folders WHERE path=?")) {
+                check.setString(1, library.toString());
+                try (var rows = check.executeQuery()) { if (rows.next() && rows.getInt(1) != 0) return; }
+            }
+            try (var attach = db.prepareStatement("ATTACH DATABASE ? AS legacy")) {
+                attach.setString(1, old.toUri().toASCIIString() + "?mode=ro");
+                attach.execute();
+            }
+            var tables = new HashSet<String>();
+            try (var rows = sql.executeQuery("SELECT name FROM legacy.sqlite_master WHERE type='table'")) {
+                while (rows.next()) tables.add(rows.getString(1));
+            }
+            // A copied index can still contain absolute paths from its original directory.
+            sql.execute("CREATE TEMP TABLE incoming(id INTEGER PRIMARY KEY, md TEXT UNIQUE)");
+            try (var select = db.prepareStatement("INSERT INTO incoming SELECT id,md FROM legacy.docs WHERE substr(md,1,length(?1))=?1 AND instr(substr(md,length(?1)+1),?2)=0 AND md NOT IN (SELECT md FROM main.docs)")) {
+                String prefix = library.toString();
+                select.setString(1, prefix.endsWith(File.separator) ? prefix : prefix + File.separator);
+                select.setString(2, File.separator);
+                select.executeUpdate();
+            }
+            sql.executeUpdate("INSERT INTO main.docs(md,stamp,source,title) SELECT d.md,stamp,source,title FROM legacy.docs d JOIN incoming i ON i.id=d.id");
+            String join = " JOIN incoming i ON i.id=v.doc JOIN main.docs d ON d.md=i.md ORDER BY v.id";
+            sql.executeUpdate("INSERT INTO main.lines(doc,kind,section,text,folded) SELECT d.id,v.kind,v.section,v.text,v.folded FROM legacy.lines v" + join);
+            if (tables.contains("pictures"))
+                sql.executeUpdate("INSERT INTO main.pictures(doc,path,location,section,text,folded) SELECT d.id,v.path,v.location,v.section,v.text,v.folded FROM legacy.pictures v" + join);
+            for (String table : List.of("large_allowed","large_pending")) {
+                if (tables.contains(table)) {
+                    try (var rows = sql.executeQuery("SELECT * FROM legacy." + table);
+                         var insert = db.prepareStatement("INSERT OR IGNORE INTO main." + table +
+                                 (table.equals("large_pending") ? " VALUES(?,?)" : " VALUES(?)"))) {
+                        while (rows.next()) {
+                            Path path = Path.of(rows.getString(1));
+                            if (!library.equals(path.getParent())) continue;
+                            insert.setString(1, path.toString());
+                            if (table.equals("large_pending")) insert.setLong(2, rows.getLong(2));
+                            insert.executeUpdate();
+                        }
+                    }
+                }
+            }
+            String hold = tables.contains("library_options") ?
+                    ",hold_large=coalesce((SELECT value FROM legacy.library_options WHERE name='hold_large'),1)" : "";
+            try (var done = db.prepareStatement("UPDATE folders SET imported=1" + hold + " WHERE path=?")) {
+                done.setString(1, library.toString());
+                done.executeUpdate();
             }
         }
 
@@ -369,8 +518,9 @@ final class SearchIndex {
         }
 
         private boolean holdLarge() throws SQLException {
-            try (var rows = sql.executeQuery("SELECT value FROM library_options WHERE name='hold_large'")) {
-                return !rows.next() || rows.getInt(1) != 0;
+            try (var query = db.prepareStatement("SELECT hold_large FROM folders WHERE path=?")) {
+                query.setString(1, library.toString());
+                try (var rows = query.executeQuery()) { return !rows.next() || rows.getInt(1) != 0; }
             }
         }
 
@@ -387,11 +537,14 @@ final class SearchIndex {
         }
 
         private Outcome removeMissing(Path note) throws SQLException {
-            if (!library.equals(note.getParent()) || Files.notExists(note) || Files.isDirectory(note)) {
+            if (library.equals(note.getParent()) && (Files.notExists(note) || Files.isDirectory(note))) {
                 clearPending(note);
                 try (var clear = db.prepareStatement("DELETE FROM large_allowed WHERE md=?")) {
                     clear.setString(1, note.toString());
                     clear.executeUpdate();
+                }
+                try(var clear=db.prepareStatement("DELETE FROM document_roles WHERE md=?")){
+                    clear.setString(1,note.toString());clear.executeUpdate();
                 }
                 return delete(note);
             }
@@ -414,7 +567,10 @@ final class SearchIndex {
                 if (row.next()) {
                     String[] previous = row.getString(1).split("\n", 3);
                     if (previous.length == 3 && stamp.equals(previous[0])
-                            && PictureAssets.manifestStamp(file, previous[1]).equals(previous[2])) return Outcome.UNCHANGED;
+                            && PictureAssets.manifestStamp(file, previous[1]).equals(previous[2])) {
+                        if(row.getString(4)==null)inferRole(file,row.getLong(2),row.getString(3));
+                        return Outcome.UNCHANGED;
+                    }
                 }
             }
 
@@ -499,6 +655,26 @@ final class SearchIndex {
                         .replace("\\|", "|").replace("\\\\", "\\");
                 add(line, id, 2, section, value);
             }
+            inferRole(file,id,title);
+        }
+
+        private void inferRole(Path note,long id,String title)throws SQLException{
+            var kind=PmReference.classify(title);
+            if(kind==null){
+                try(var q=db.prepareStatement("SELECT section,text FROM lines WHERE doc=? AND kind=2 ORDER BY id LIMIT 80")){
+                    q.setLong(1,id);
+                    try(var rows=q.executeQuery()){
+                        while(kind==null && rows.next()){
+                            kind=PmReference.classify(rows.getString(1));
+                            String heading=rows.getString(2);
+                            if(kind==null && heading.startsWith("### "))kind=PmReference.classify(heading);
+                        }
+                    }
+                }
+            }
+            try(var q=db.prepareStatement("INSERT INTO document_roles(md,inferred) VALUES(?,?) ON CONFLICT(md) DO UPDATE SET inferred=excluded.inferred")){
+                q.setString(1,note.toString());q.setString(2,kind==null?"":kind.name());q.executeUpdate();
+            }
         }
 
         @Override public void close() throws SQLException {
@@ -562,7 +738,7 @@ final class SearchIndex {
                     FROM fields JOIN words ON instr(folded,word)>0
                 ) SELECT candidate,word,field,quote FROM matches WHERE choice=1 ORDER BY candidate,ord,field
                 """;
-        return readIndex(library,db->{
+        return readIndex(db->{
             try(var stmt=db.prepareStatement(sql)){
                 stmt.setString(1,candidates.toString());
                 stmt.setString(2,new com.google.gson.Gson().toJson(terms.stream().map(t->t.toLowerCase(Locale.ROOT)).distinct().limit(8).toList()));
@@ -576,14 +752,42 @@ final class SearchIndex {
         });
     }
 
+    static String documentRole(Path md)throws IOException{
+        var values=readIndex(db->{
+            try(var q=db.prepareStatement("SELECT role FROM visible_docs WHERE md=?")){
+                q.setString(1,md.toString());
+                try(var r=q.executeQuery()){return r.next()?List.of(r.getString(1)):List.<String>of();}
+            }
+        });
+        if(values.isEmpty() || values.getFirst().isBlank() || values.getFirst().equals("UNKNOWN"))return "미분류";
+        return PmReference.Kind.valueOf(values.getFirst()).label;
+    }
+
+    static void setDocumentRole(Path md,String selection)throws IOException{
+        String role=null;
+        if(!selection.equals("자동 분류")){
+            role=Arrays.stream(PmReference.Kind.values()).filter(k->k.label.equals(selection))
+                    .map(Enum::name).findFirst().orElse("UNKNOWN");
+        }
+        try(var writer=new IndexWriter(md.getParent());
+            var q=writer.db.prepareStatement("INSERT INTO document_roles(md,inferred,manual) SELECT md,'',? FROM docs WHERE md=? ON CONFLICT(md) DO UPDATE SET manual=excluded.manual")){
+            q.setString(1,role);q.setString(2,md.toString());
+            if(q.executeUpdate()!=1)throw new IOException("색인에서 문서를 찾지 못했습니다.");
+        }catch(SQLException e){throw new IOException(e);}
+    }
+
     static List<DocumentAgent.Claim> pmReferences(Path root,PmReference plan,Focus focus)throws IOException {
-        return readIndex(root,db->plan.search(db,focus));
+        return pmReferences(root,plan,focus,"");
+    }
+
+    static List<DocumentAgent.Claim> pmReferences(Path root,PmReference plan,Focus focus,String question)throws IOException {
+        return readIndex(db->plan.search(db,focus,question));
     }
 
     record Focus(Path md, String section) {}
 
     static List<Library.Hit> focusedDocument(Path root, Focus focus) throws IOException {
-        return readIndex(root, db -> {
+        return readIndex(db -> {
             try(var stmt=db.prepareStatement("SELECT md,source,title,'','' FROM visible_docs WHERE md=?")){
                 stmt.setString(1,focus.md().toString());
                 return results(stmt);
@@ -595,7 +799,7 @@ final class SearchIndex {
         if(focus==null) return agentCandidates(library,terms,pictures);
         var words=terms.stream().map(w->w.strip().toLowerCase(Locale.ROOT)).filter(w->!w.isEmpty()).distinct().limit(8).toList();
         if(words.isEmpty())return List.of();
-        return readIndex(library,db->{
+        return readIndex(db->{
             String table=pictures ? "pictures" : "lines";
             String target=pictures ? "p.id" : "p.section";
             String sql="SELECT d.md,d.source,d.title,p.section,substr(p.text,1,2000)"
@@ -618,7 +822,7 @@ final class SearchIndex {
         var words = terms.stream().map(w -> w.strip().toLowerCase(Locale.ROOT))
                 .filter(w -> !w.isEmpty()).distinct().limit(8).toList();
         if (words.isEmpty()) return List.of();
-        return readIndex(library, db -> pictures
+        return readIndex(db -> pictures
                 ? findPictures(db, words, Mode.OR, 50)
                 : findSections(db, words));
     }
@@ -640,13 +844,21 @@ final class SearchIndex {
                 ), titles AS (
                     SELECT doc,count(DISTINCT word) AS coverage FROM matches WHERE kind=0 GROUP BY doc
                 )
-                SELECT d.md,d.source,d.title,s.section,
+                , candidates AS (
+                    SELECT s.doc,s.section,s.evidence,s.coverage,coalesce(t.coverage,0) AS title_score
+                    FROM sections s LEFT JOIN titles t ON t.doc=s.doc
+                    UNION ALL
+                    SELECT t.doc,'제목',min(m.id),0,t.coverage
+                    FROM titles t JOIN matches m ON m.doc=t.doc AND m.kind=0
+                    WHERE NOT EXISTS (SELECT 1 FROM sections s WHERE s.doc=t.doc)
+                    GROUP BY t.doc
+                )
+                SELECT d.md,d.source,d.title,c.section,
                        substr(l.text,max(1,instr(l.folded,m.word)-80),240)
-                FROM sections s JOIN lines l ON l.id=s.evidence
-                JOIN matches m ON m.id=s.evidence JOIN visible_docs d ON d.id=s.doc
-                LEFT JOIN titles t ON t.doc=s.doc
-                GROUP BY s.doc,s.section
-                ORDER BY s.coverage+coalesce(t.coverage,0) DESC,s.coverage DESC,d.title,d.md,s.evidence
+                FROM candidates c JOIN lines l ON l.id=c.evidence
+                JOIN matches m ON m.id=c.evidence JOIN visible_docs d ON d.id=c.doc
+                GROUP BY c.doc,c.section
+                ORDER BY c.coverage+c.title_score DESC,c.coverage DESC,d.title,d.md,c.evidence
                 LIMIT 50
                 """;
         try (var stmt = db.prepareStatement(sql)) {

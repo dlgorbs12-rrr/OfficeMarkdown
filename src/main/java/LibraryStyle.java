@@ -4,8 +4,8 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 
 final class LibraryStyle {
-    static final Color CANVAS = new Color(0xF4F4F8), INK = new Color(0x282539),
-            MUTED = new Color(0x645F73), PURPLE = new Color(0x5842AD), LINE = new Color(0xDEDBE8);
+    static final Color CANVAS = new Color(0xF8F6ED), INK = new Color(0x25251F),
+            MUTED = new Color(0x706E62), ACCENT = new Color(0xB74323), LINE = new Color(0xD9D6C8);
     static final Font TYPE = new Font("Malgun Gothic", Font.PLAIN, 14);
 
     static JLabel label(String text, int size, boolean bold, Color color) {
@@ -37,7 +37,7 @@ final class LibraryStyle {
         button.setMargin(new Insets(6,14,6,14));
         button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         if (primary) {
-            button.setBackground(PURPLE);
+            button.setBackground(ACCENT);
             button.setForeground(Color.WHITE);
             button.setFont(TYPE.deriveFont(Font.BOLD));
         }
@@ -70,9 +70,9 @@ final class LibraryStyle {
         return (list, hit, index, selected, focus) -> {
             JPanel row = panel(new BorderLayout(12,0), 10);
             row.setOpaque(true);
-            row.setBackground(selected ? new Color(0xEDE8FB) : Color.WHITE);
+            row.setBackground(selected ? SearchStudio.SELECTED : SearchStudio.CHARCOAL);
             row.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createMatteBorder(0,selected?3:0,1,0,selected?PURPLE:LINE),
+                    BorderFactory.createMatteBorder(0,selected?3:0,1,0,selected?ACCENT:LINE),
                     new EmptyBorder(9,selected?9:12,9,10)));
             Icon thumbnail = thumbnails.apply(hit);
             if (thumbnail == null) {
@@ -86,9 +86,9 @@ final class LibraryStyle {
             }
             row.add(new JLabel(thumbnail),BorderLayout.WEST);
             JPanel text = panel(new GridLayout(2,1),0);
-            text.add(label(hit.title(),14,true,INK));
+            text.add(label(hit.title(),14,true,selected ? INK : Color.WHITE));
             String detail = hit.picture() == null ? hit.section() : hit.picture().location();
-            text.add(label(detail+"   "+hit.excerpt().replaceAll("\\R"," "),12,false,MUTED));
+            text.add(label(detail+"   "+hit.displayExcerpt().replaceAll("\\R"," "),12,false,selected ? INK : new Color(0xDBDED4)));
             row.add(text);
             return row;
         };

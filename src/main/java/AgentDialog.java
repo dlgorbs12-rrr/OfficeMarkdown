@@ -6,12 +6,13 @@ import javax.swing.*;
 import java.awt.image.BufferedImage;
 import org.jsoup.nodes.Entities;
 
-final class AgentDialog extends JDialog {
+final class AgentDialog extends JPanel {
     private final JComboBox<DocumentAgent.Provider> providers=new JComboBox<>(DocumentAgent.Provider.values());
     private final JComboBox<String> purpose=new JComboBox<>(new String[]{"자동","근거로 답변","페이지·구역 찾기","그림 OCR 찾기","MCP 문서 검색"});
     private final JTextArea question=new JTextArea(2,30);
     private final JComboBox<DocumentAgent.Effort> effort=new JComboBox<>();
     private final JComboBox<String> models=new JComboBox<>();
+    private final JPanel introduction;
     private final JButton settings=new JButton("에이전트 설정");
     private static final String DEFAULT_MODEL="CLI 기본 모델";
     private boolean loadingEffort;
@@ -19,12 +20,13 @@ final class AgentDialog extends JDialog {
     private final JEditorPane answer=new JEditorPane("text/html","");
     private final JLabel state=new JLabel("질문과 관련 발췌문을 선택한 에이전트로 보냅니다.");
     private final JPanel conversation=new JPanel();
+    private final JPanel startDocuments=LibraryStyle.panel(new BorderLayout(0,10),12);
     private final JScrollPane threadScroll=new JScrollPane(conversation);
     private final Path library;
     private DocumentAgent.Claim selected;
     private final JPanel detail=new JPanel(new BorderLayout());
     private final JSplitPane results=new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
-    private final JButton scopeChip=new JButton("전체 보관함");
+    private final JButton scopeChip=new JButton("색인된 전체 문서");
     private final Consumer<Library.Hit> openSource;
     private SearchIndex.Focus focus;
     private final JLabel image = new JLabel("", SwingConstants.CENTER);
@@ -35,22 +37,20 @@ final class AgentDialog extends JDialog {
 
     boolean isAnswering() { return task != null && !task.isDone(); }
 
-    AgentDialog(JFrame parent,Path library,Consumer<Library.Hit> preview,Consumer<Library.Hit> openOriginal){
-        super(parent,"문서에 질문",false);
+    AgentDialog(Path library,Consumer<Library.Hit> preview,Consumer<Library.Hit> openOriginal){
+        super(new BorderLayout());
         this.library=library;this.openSource=openOriginal;
         providers.setSelectedItem(AgentConnection.preferred());
-        JPanel body=LibraryStyle.panel(new BorderLayout(0,12),18);
+        JPanel body=LibraryStyle.panel(new BorderLayout(0,12),4);
         body.setOpaque(true);body.setBackground(LibraryStyle.CANVAS);
-        JPanel top=LibraryStyle.panel(new BorderLayout(0,12),0);
-        JPanel heading=LibraryStyle.panel(new BorderLayout(),0);
-        JLabel title=LibraryStyle.label("문서에 질문",23,true,LibraryStyle.INK);
-        title.setIcon(LibraryStyle.document("",36,LibraryStyle.PURPLE));title.setIconTextGap(10);
-        heading.add(title);
-        LibraryStyle.button(settings,false);top.add(heading,BorderLayout.NORTH);
-        JPanel controls=LibraryStyle.card(new GridLayout(1,4,10,0));
+        JPanel top=LibraryStyle.panel(new BorderLayout(0,8),0);
+        introduction = SearchStudio.heading(SearchStudio.headline("내 문서에","질문해 보세요."));
+        top.add(introduction,BorderLayout.NORTH);
+        LibraryStyle.button(settings,false);
+        JPanel controls=LibraryStyle.card(new GridLayout(0,3,10,4));
         models.setEditable(true);
         models.setToolTipText("목록에서 선택하거나 CLI에서 사용하는 모델 ID를 입력하세요.");
-        controls.add(settings);controls.add(field("에이전트",providers));controls.add(field("모델 선택",models));
+        controls.add(field("에이전트",providers));controls.add(field("모델 선택",models));
         controls.add(field("추론 깊이",effort));
         body.add(top,BorderLayout.NORTH);
         effort.setToolTipText("검색어 추출과 답변 작성에 적용합니다. 지원 단계는 현재 CLI 모델에 따라 다릅니다.");
@@ -68,7 +68,7 @@ final class AgentDialog extends JDialog {
                 AgentConnection.effort((DocumentAgent.Provider)providers.getSelectedItem(),choice);
         });
         settings.addActionListener(e->{
-            var chosen=AgentSettingsDialog.open(this,(DocumentAgent.Provider)providers.getSelectedItem());
+            var chosen=AgentSettingsDialog.open(SwingUtilities.getWindowAncestor(this),(DocumentAgent.Provider)providers.getSelectedItem());
             if(chosen!=null)selectDefault();
         });
         JPanel result=LibraryStyle.card(new BorderLayout(0,8));
@@ -78,7 +78,10 @@ final class AgentDialog extends JDialog {
         answer.setText("<html><body style='color:#645f73'><p>질문을 입력하면 관련 문서를 찾아 답변과 인용문을 함께 보여줍니다.</p></body></html>");
         conversation.setLayout(new BoxLayout(conversation,BoxLayout.Y_AXIS));
         conversation.setBackground(Color.WHITE);
+        conversation.add(startDocuments);
+        setLibraryExamples(List.of());
         threadScroll.setPreferredSize(new Dimension(430,320));
+        threadScroll.setBorder(null);
 
         var closePreview=new JButton("미리보기 닫기");
         closePreview.addActionListener(e->hidePreview());
@@ -101,14 +104,18 @@ final class AgentDialog extends JDialog {
         result.add(results);body.add(result);
         JPanel composer=LibraryStyle.card(new BorderLayout(0,8));
         var options=new JPanel(new FlowLayout(FlowLayout.LEFT,4,0));
-        var toggle=new JToggleButton("모델 설정");
+        var toggle=new JToggleButton("검색 설정");
         controls.setVisible(false);
         toggle.addActionListener(e->{controls.setVisible(toggle.isSelected());composer.revalidate();});
         scopeChip.setEnabled(false);scopeChip.addActionListener(e->setFocus(null,false));
-        options.add(scopeChip);options.add(purpose);options.add(toggle);
-        var toolBar=new JPanel(new BorderLayout());toolBar.add(options,BorderLayout.NORTH);toolBar.add(controls);
+        controls.add(field("검색 방식",purpose));controls.add(settings);
+        options.add(scopeChip);options.add(toggle);
+        options.setOpaque(false);
+        var toolBar=new JPanel(new BorderLayout());toolBar.setOpaque(false);toolBar.add(options,BorderLayout.NORTH);toolBar.add(controls);
         composer.add(toolBar,BorderLayout.NORTH);
         composer.add(new JScrollPane(question),BorderLayout.CENTER);
+        question.putClientProperty("JTextArea.placeholderText","보관함에 물어볼 질문을 입력하세요");
+        question.getAccessibleContext().setAccessibleName("문서에 질문");
         question.setLineWrap(true);question.setWrapStyleWord(true);question.setFont(LibraryStyle.TYPE);
         question.setMargin(new Insets(6,8,6,8));
         question.setToolTipText("예: AD 어댑터 설정 절차를 알려줘");
@@ -116,29 +123,50 @@ final class AgentDialog extends JDialog {
         state.setFont(LibraryStyle.TYPE.deriveFont(12f));state.setForeground(LibraryStyle.MUTED);
         footer.add(state);
         JPanel actions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
-        actions.add(LibraryStyle.label("Ctrl+Enter 전송",12,false,LibraryStyle.MUTED));actions.add(stop);actions.add(ask);
+        actions.add(LibraryStyle.label("Enter 검색 · Shift+Enter 줄바꿈",12,false,LibraryStyle.MUTED));actions.add(stop);actions.add(ask);
         footer.add(actions,BorderLayout.EAST);composer.add(footer,BorderLayout.SOUTH);
-        body.add(composer,BorderLayout.SOUTH);setContentPane(body);
+        top.add(composer,BorderLayout.CENTER);add(body);
         stop.setVisible(false);stop.addActionListener(e->{if(task!=null)task.cancel(true);if(previewTask!=null)previewTask.cancel(true);});
         ask.addActionListener(e->runQuestion());
+        question.getInputMap().put(KeyStroke.getKeyStroke("shift ENTER"),javax.swing.text.DefaultEditorKit.insertBreakAction);
+        question.getInputMap().put(KeyStroke.getKeyStroke("ENTER"),"submit");
         question.getInputMap().put(KeyStroke.getKeyStroke("control ENTER"),"submit");
         question.getActionMap().put("submit",new AbstractAction(){
             public void actionPerformed(java.awt.event.ActionEvent e){if(ask.isEnabled())runQuestion();}
         });
-        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
-        addWindowListener(new java.awt.event.WindowAdapter(){
-            public void windowClosed(java.awt.event.WindowEvent e){if(task!=null)task.cancel(true);if(previewTask!=null)previewTask.cancel(true);}
-        });
-        LibraryStyle.button(ask,true);setMinimumSize(new Dimension(680,480));setSize(1050,720);setLocationRelativeTo(parent);
+        LibraryStyle.button(ask,true);
+    }
+
+    void focusQuestion() { question.requestFocusInWindow(); }
+
+    void setLibraryExamples(List<Library.Hit> hits) {
+        if (!introduction.isVisible()) return;
+        startDocuments.removeAll();
+        startDocuments.add(LibraryStyle.label("질문할 문서",18,true,LibraryStyle.INK),BorderLayout.NORTH);
+        var choices=LibraryStyle.panel(new GridLayout(0,1,0,4),0);
+        if(hits.isEmpty()) choices.add(LibraryStyle.label("색인된 문서가 여기에 표시됩니다.",14,false,LibraryStyle.MUTED));
+        for(var hit:hits.stream().limit(3).toList()){
+            var doc=new JButton(hit.title());
+            doc.putClientProperty("html.disable",true);
+            doc.setHorizontalAlignment(SwingConstants.LEFT);
+            doc.setToolTipText("질문 범위를 이 문서로 설정");
+            doc.addActionListener(e->{setFocus(hit,false);focusQuestion();});
+            choices.add(doc);
+        }
+        startDocuments.add(choices);
+        startDocuments.setMaximumSize(new Dimension(Integer.MAX_VALUE,startDocuments.getPreferredSize().height));
+        startDocuments.revalidate(); startDocuments.repaint();
     }
 
     private JPanel beginTurn(String text) {
+        conversation.remove(startDocuments);
+        introduction.setVisible(false);
         var turn=new JPanel(new BorderLayout(0,6));
         turn.setBackground(Color.WHITE);
         turn.setBorder(BorderFactory.createEmptyBorder(8,8,12,8));
         var bubble=new JTextArea(text);
         bubble.setEditable(false);bubble.setLineWrap(true);bubble.setWrapStyleWord(true);
-        bubble.setFont(LibraryStyle.TYPE);bubble.setBackground(new Color(0xEDE8FB));
+        bubble.setFont(LibraryStyle.TYPE);bubble.setBackground(SearchStudio.CHARCOAL);bubble.setForeground(Color.WHITE);
         bubble.setBorder(BorderFactory.createEmptyBorder(7,10,7,10));
         bubble.setColumns(Math.min(38,Math.max(8,text.length())));
         var questionRow=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,0,0),0);
@@ -163,9 +191,28 @@ final class AgentDialog extends JDialog {
     private void showSources(JPanel turn,List<DocumentAgent.Claim> claims,boolean answers) {
         var messages=new JPanel(new BorderLayout(0,4));
         if(answers){
-            var text=new JTextArea(String.join("\n\n",claims.stream().map(DocumentAgent.Claim::answer).distinct().toList()));
-            text.setEditable(false);text.setLineWrap(true);text.setWrapStyleWord(true);
-            text.setFont(LibraryStyle.TYPE);text.setColumns(30);messages.add(text,BorderLayout.NORTH);
+            var paragraphs=LibraryStyle.panel(new GridLayout(0,1,0,5),0);
+            var grouped=new java.util.LinkedHashMap<String,java.util.List<Integer>>();
+            for(int i=0;i<claims.size();i++)
+                grouped.computeIfAbsent(claims.get(i).answer(),ignored->new java.util.ArrayList<>()).add(i);
+            for(var entry:grouped.entrySet()){
+                var paragraph=LibraryStyle.panel(new BorderLayout(8,0),4);
+                var text=new JTextArea(entry.getKey());
+                text.setEditable(false);text.setLineWrap(true);text.setWrapStyleWord(true);
+                text.setFont(LibraryStyle.TYPE);text.setColumns(30);
+                paragraph.add(text);
+                var citations=LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,3,0),0);
+                for(int index:entry.getValue()){
+                    var claim=claims.get(index);
+                    var cite=new JButton("["+(index+1)+"]");
+                    cite.setToolTipText(claim.proof().title()+" · "+claim.proof().section());
+                    cite.addActionListener(e->showSelected(claim));
+                    citations.add(cite);
+                }
+                paragraph.add(citations,BorderLayout.SOUTH);
+                paragraphs.add(paragraph);
+            }
+            messages.add(paragraphs,BorderLayout.NORTH);
         }
         var cards=new JPanel();
         cards.setLayout(new BoxLayout(cards,BoxLayout.Y_AXIS));
@@ -250,11 +297,12 @@ final class AgentDialog extends JDialog {
     }
 
     private void setFocus(Library.Hit hit,boolean page){
+        if (hit!=null && hit.section().equals("제목") && hit.picture()==null) page=false;
         focus=hit==null?null:new SearchIndex.Focus(hit.md(),page?hit.section():null);
-        String label=hit==null?"전체 보관함":hit.title()+(page?" › "+hit.section():"");
+        String label=hit==null?"색인된 전체 문서":hit.title()+(page?" › "+hit.section():"");
         String shortName=hit!=null && hit.title().length()>30 ? hit.title().substring(0,29)+"…" : hit==null?label:hit.title();
         scopeChip.setText(shortName+(hit!=null && page?" › "+hit.section():"")+(hit==null?"":"  ×"));
-        scopeChip.setEnabled(hit!=null);scopeChip.setToolTipText(hit==null?label:"전체 보관함으로 전환 · "+label);
+        scopeChip.setEnabled(hit!=null);scopeChip.setToolTipText(hit==null?label:"색인된 전체 문서으로 전환 · "+label);
     }
 
     private void hidePreview(){
@@ -271,7 +319,6 @@ final class AgentDialog extends JDialog {
         original.setEnabled(claim!=null);position.setEnabled(claim!=null);
         if(claim==null){answer.setText("");return;}
         var hit=claim.proof();
-        setFocus(hit,true);
         results.setRightComponent(detail);results.setDividerSize(8);results.setDividerLocation(0.52);
         String heading="<html><body><h3>"+Entities.escape(hit.title())+"</h3><p>"
                 +Entities.escape(hit.source().toString())+"<br>"+Entities.escape(hit.section())+"</p>";
@@ -285,7 +332,7 @@ final class AgentDialog extends JDialog {
                 }
                 var page=MarkdownReader.previewPage(hit.md(),hit);
                 return new Detail(page==null ? "<p>현재 변환본에서 해당 구역을 찾지 못했습니다.</p>"
-                        : org.jsoup.Jsoup.parse(MarkdownReader.html(page)).body().html(),null);
+                        : org.jsoup.Jsoup.parse(MarkdownReader.html(page,hit.picture(),hit.md())).body().html(),null);
             }
             protected void done(){
                 if(isCancelled() || selected!=claim)return;
@@ -320,6 +367,7 @@ final class AgentDialog extends JDialog {
     void selectDefault(){if(ask.isEnabled())providers.setSelectedItem(AgentConnection.preferred());}
 
     private void loadEffort(){
+        settings.setText(providers.getSelectedItem()+" 연결 설정");
         var provider=(DocumentAgent.Provider)providers.getSelectedItem();
         loadingEffort=true;
         try{
@@ -334,21 +382,23 @@ final class AgentDialog extends JDialog {
     }
 
     private void runQuestion(){
-        String text=question.getText().strip();if(text.isEmpty()){state.setText("질문을 입력하세요.");question.requestFocusInWindow();return;}
+        runQuestion(question.getText().strip(),purpose.getSelectedIndex(),focus,true);
+    }
+
+    private void runQuestion(String text,int selectedPurpose,SearchIndex.Focus activeFocus,boolean fromComposer){
+        if(text.isEmpty()){state.setText("질문을 입력하세요.");question.requestFocusInWindow();return;}
         var provider=(DocumentAgent.Provider)providers.getSelectedItem();
         String model=selectedModel();
         try{DocumentAgent.modelArguments(model);}catch(IllegalArgumentException e){state.setText(e.getMessage());models.requestFocusInWindow();return;}
         AgentConnection.model(provider,model);
         try{provider.executable();}catch(java.io.IOException e){
             state.setText("에이전트 설정에서 CLI를 먼저 연결하세요.");
-            if(AgentSettingsDialog.open(this,provider)!=null)selectDefault();
+            if(AgentSettingsDialog.open(SwingUtilities.getWindowAncestor(this),provider)!=null)selectDefault();
             return;
         }
         var choice=(DocumentAgent.Effort)effort.getSelectedItem();
-        int selectedPurpose=purpose.getSelectedIndex();
-        var activeFocus=focus;
         purpose.setEnabled(false);
-        question.setText("");
+        if(fromComposer)question.setText("");
         JPanel turn=beginTurn(text);
 
 
@@ -373,8 +423,19 @@ final class AgentDialog extends JDialog {
                     var claims=get();
                     if(!claims.isEmpty()) showSources(turn,claims,action==1);
                     else if(action==2 && PmReference.surveyReference(text))
-                        turnStatus(turn,"현재 검색 범위에서 조건에 맞는 사전조사서를 찾지 못했습니다. 다른 보관함 또는 원본 추가 여부를 확인하세요.");
+                        turnStatus(turn,"현재 검색 범위에서 조건에 맞는 사전조사서를 찾지 못했습니다. 문서가 색인되었는지 확인하세요.");
                     else turnStatus(turn,action==1 ? "답변을 뒷받침하는 근거를 찾지 못했습니다." : "현재 색인에서 일치하는 위치를 찾지 못했습니다.");
+                    if(action!=4){
+                        var refine=new JButton("근거를 더 확인해 다시 찾기");
+                        refine.addActionListener(e->{
+                            if(isAnswering())return;
+                            runQuestion(text,4,activeFocus,false);
+                        });
+                        var row=(JPanel)((BorderLayout)turn.getLayout()).getLayoutComponent(BorderLayout.NORTH);
+                        row.add(refine,0);
+                        turn.setMaximumSize(new Dimension(Integer.MAX_VALUE,turn.getPreferredSize().height));
+                        conversation.revalidate();
+                    }
                     state.setText(provider+" · "+(model.isEmpty()?DEFAULT_MODEL:model)+" · "+choice+(action==1?" · 확인된 인용 ":" · 검색 결과 ")+claims.size()+"건");
                 }catch(java.util.concurrent.CancellationException e){
                     state.setText("질문 중단");turnStatus(turn,"질문을 중단했습니다.");

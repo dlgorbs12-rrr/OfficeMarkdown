@@ -34,5 +34,19 @@ class OfficeIndexMcpTest {
         assertEquals("Questions",result.get("section").getAsString());
         assertFalse(Files.exists(root.resolve("E1")));
     }
+    @Test void unicodeMatchesAcrossProtocolFieldsAndTitleFilters() throws Exception {
+        Files.writeString(root.resolve("demo.md"), "# CAFÉ guide\n\n[원본 파일 열기](<"
+                + root.resolve("demo.docx").toUri()+">)\n\n## ÉTAPE\n\nCAFÉ 🔵A");
+        SearchIndex.synchronize(root,p->{});
+        var server=OfficeIndexMcp.external(root);
+        for(String[] sample:new String[][]{{"title","café"},{"body","café"},{"section","étape"},{"body","🔵a"}}){
+            var args=new JsonObject();
+            args.addProperty("field",sample[0]);args.addProperty("query",sample[1]);
+            args.add("required",OfficeIndexMcp.JSON.toJsonTree(List.of("café")));
+            assertEquals(1,((List<?>)server.call("search",args)).size(),Arrays.toString(sample));
+        }
+        var evidence=server.call("read_evidence",json("{'document':'1','query':'🔵a'}"));
+        assertTrue(OfficeIndexMcp.JSON.toJson(evidence).contains("CAFÉ 🔵A"));
+    }
     private static JsonObject json(String text){return JsonParser.parseString(text).getAsJsonObject();}
 }

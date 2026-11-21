@@ -90,7 +90,12 @@ final class Library {
     }
 
     private static void shapes(List<? extends Shape<?, ?>> shapes, Writer out, PictureAssets pictures, String section) throws IOException {
-        for (Shape<?, ?> shape : shapes) {
+        // PowerPoint stores shapes in stacking order. Read each group in page coordinates.
+        var ordered = new ArrayList<>(shapes);
+        ordered.sort(Comparator.comparing(Shape::getAnchor, Comparator.nullsLast(
+                Comparator.comparingDouble(java.awt.geom.Rectangle2D::getMinY)
+                        .thenComparingDouble(java.awt.geom.Rectangle2D::getMinX))));
+        for (Shape<?, ?> shape : ordered) {
             if (shape instanceof TableShape<?, ?> table) {
                 for (int i = 0; i < table.getNumberOfRows(); i++) {
                     StringJoiner row = new StringJoiner(" | ", "| ", " |\n");
@@ -113,7 +118,20 @@ final class Library {
                 if (data != null) pictures.write(data.getData(), data.getType().name(), section, section + " · " + picture.getShapeName(), out);
             } else if (shape instanceof GroupShape<?, ?> group) shapes(group.getShapes(), out, pictures, section);
             else if (shape instanceof TextShape<?, ?> text && !text.getText().isBlank()) {
-                out.write(plain(text.getText()) + "\n\n");
+                var placeholder = text.getTextPlaceholder();
+                boolean title = placeholder == TextShape.TextPlaceholder.TITLE
+                        || placeholder == TextShape.TextPlaceholder.CENTER_TITLE;
+                for (var paragraph : text.getTextParagraphs()) {
+                    var line = new StringBuilder();
+                    for (TextRun run : paragraph.getTextRuns()) line.append(run.getRawText());
+                    String value = line.toString().replace('\u000b', ' ').strip();
+                    if (value.isEmpty()) continue;
+                    var bullet = paragraph.getBulletStyle();
+                    String prefix = title ? "### " : bullet == null ? "" :
+                            "  ".repeat(Math.clamp(paragraph.getIndentLevel(), 0, 8)) + "- ";
+                    out.write(prefix + plain(value) + (bullet == null ? "\n\n" : "\n"));
+                }
+                out.write("\n");
             }
         }
     }
@@ -180,7 +198,14 @@ final class Library {
         }
     }
 
-    record Hit(Path md, Path source, String title, String section, String excerpt, PictureAssets.Reference picture) {
+    record Hit(Path md, Path source, String title, String section, String excerpt, PictureAssets.Reference picture, String imageDescription,String additionalOcr) {
+        String displayExcerpt(){
+            String text=additionalOcr.isEmpty()?excerpt:"검색용 OCR · "+additionalOcr;
+            return imageDescription.isEmpty()?text:"그림 설명 · "+imageDescription+"\n"+text;
+        }
+        Hit(Path md,Path source,String title,String section,String excerpt,PictureAssets.Reference picture){
+            this(md,source,title,section,excerpt,picture,"","");
+        }
         Hit(Path md, Path source, String title, String section, String excerpt) {
             this(md, source, title, section, excerpt, null);
         }

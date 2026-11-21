@@ -8,7 +8,7 @@ import java.util.*;
 public final class OfficeIndexMcp {
     static final Gson JSON=new Gson();
     record Row(String md,String source,String title,String section,String text,String picture,String location) {}
-    private final Path root,session;
+    private final Path session;
     private final String focus,section;
     private final List<String> documents=new ArrayList<>();
     private int calls,evidence;
@@ -18,8 +18,9 @@ public final class OfficeIndexMcp {
     }
     private OfficeIndexMcp(Path session,JsonObject config) throws IOException {
         this.session=session;
-        root=Path.of(string(config,"root")).toAbsolutePath().normalize();
-        if(!Files.isRegularFile(root.resolve(SearchIndex.DATABASE)))throw new IOException("검색 색인이 없는 보관함: "+root);
+        Path root=Path.of(string(config,"root")).toAbsolutePath().normalize();
+        SearchIndex.importPreviousIndex(root);
+        if(!Files.isRegularFile(SearchIndex.database()))throw new IOException("먼저 문서를 색인하세요.");
         focus=string(config,"focus");
         section=string(config,"section");
     }
@@ -65,21 +66,22 @@ public final class OfficeIndexMcp {
         var args=new ArrayList<String>();
         String table=image?"pictures":"lines";
         String expr=title?"d.title":field.equals("section")?"p.section":"p.text";
+        String folded=title || field.equals("section") ? "office_lower("+expr+")" : "p.folded";
         boolean join=!title || !restrict.isEmpty();
         String snippetStart="1";
-        if(!term.isEmpty()){snippetStart="max(1,instr(lower("+expr+"),?)-120)";args.add(term);}
+        if(!term.isEmpty()){snippetStart="max(1,instr("+folded+",?)-120)";args.add(term);}
         String sql="SELECT d.md,d.source,d.title,"+(title?"''":"p.section")+",substr("+expr+","+snippetStart+",1400),"+(image?"p.path,p.location":"'', ''")
                 +" FROM visible_docs d"+(join?" JOIN "+table+" p ON p.doc=d.id":"")+" WHERE 1=1";
         if(join && !image)sql+=" AND p.kind=2";
         if(!doc.isEmpty()){sql+=" AND d.md=?";args.add(doc);}
         if(!restrict.isEmpty()){sql+=" AND p.section=?";args.add(restrict);}
         if(!term.isEmpty()){
-            if(!title && !field.equals("section") && term.length()>=3){
+            if(!title && !field.equals("section") && term.codePointCount(0,term.length())>=3){
                 String fts=image?"picture_terms":"terms";
                 sql+=" AND p.id IN (SELECT rowid FROM "+fts+" WHERE "+fts+" MATCH ?)";
                 args.add("\""+term.replace("\"","\"\"")+"\"");
             }
-            sql+=" AND instr(lower("+expr+"),?)>0";args.add(term);
+            sql+=" AND instr("+folded+",?)>0";args.add(term);
         }
         String sort="";
         if(search){
@@ -90,8 +92,8 @@ public final class OfficeIndexMcp {
                 for(var item:extra){
                     String word=item.getAsString().strip().toLowerCase(Locale.ROOT);
                     if(word.isEmpty() || word.length()>160)throw new IllegalArgumentException("Invalid title term");
-                    if(key.equals("required"))sql+=" AND instr(lower(d.title),?)>0";
-                    else sort+="(instr(lower(d.title),?)>0) DESC,";
+                    if(key.equals("required"))sql+=" AND instr(office_lower(d.title),?)>0";
+                    else sort+="(instr(office_lower(d.title),?)>0) DESC,";
                     args.add(word);
                 }
             }
@@ -101,7 +103,13 @@ public final class OfficeIndexMcp {
         int offset=a.has("offset")?a.get("offset").getAsInt():0;
         if(offset<0 || offset>100000)throw new IllegalArgumentException("Invalid offset");
         String query=sql+" OFFSET "+offset;
-        var rows=SearchIndex.readIndex(root,db->{
+        var rows=SearchIndex.readIndex(db->{
+            // SQLite lower() only folds ASCII. Use the same normalization as indexed text.
+            org.sqlite.Function.create(db,"office_lower",new org.sqlite.Function() {
+                @Override protected void xFunc() throws java.sql.SQLException {
+                    result(value_text(0).toLowerCase(Locale.ROOT));
+                }
+            },1,org.sqlite.Function.FLAG_DETERMINISTIC);
             var found=new ArrayList<Row>();
             try(var st=db.prepareStatement(query)){
                 for(int i=0;i<args.size();i++)st.setString(i+1,args.get(i));

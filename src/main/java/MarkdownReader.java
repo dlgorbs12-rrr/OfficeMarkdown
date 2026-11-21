@@ -101,6 +101,10 @@ final class MarkdownReader {
     }
 
     static String html(Page page, PictureAssets.Reference picture) {
+        return html(page,picture,null);
+    }
+
+    static String html(Page page,PictureAssets.Reference picture,Path note) {
         var extensions=List.of(TablesExtension.create());
         var parser=Parser.builder().extensions(extensions).build();
         var renderer=HtmlRenderer.builder().extensions(extensions).softbreak("<br>").escapeHtml(true).build();
@@ -108,12 +112,30 @@ final class MarkdownReader {
         String marker = null;
         if (picture != null && containsPicture(page,picture)) {
             marker = "OfficePictureAnchor" + UUID.randomUUID().toString().replace("-", "");
-            source = ("\n" + source).replace("\n" + PictureAssets.markdownLine(picture) + "\n", "\n" + marker + "\n").substring(1);
+            source = ("\n" + source).replace("\n" + PictureAssets.markdownLine(picture) + "\n", "\n" + marker + "\n" + PictureAssets.markdownLine(picture) + "\n").substring(1);
         }
         String rendered=renderer.render(parser.parse(source)).replace("&lt;br&gt;","<br>");
         var allowed=new Safelist().addTags("p","h1","h2","h3","h4","h5","h6","strong","em","code","pre",
                 "blockquote","ul","ol","li","table","thead","tbody","tr","td","th","br","hr");
+        var trusted=new HashMap<String,String>();
+        if(note!=null){
+            var parsed=Jsoup.parseBodyFragment(rendered);
+            for(var image:parsed.select("img[src]")){
+                var reference=new PictureAssets.Reference(image.attr("src"),"");
+                try{
+                    var file=PictureAssets.previewFile(note,reference,false);
+                    if(file==null)continue;
+                    String token="OfficeImage"+UUID.randomUUID().toString().replace("-","");
+                    var preview=new org.jsoup.nodes.Element("img").attr("src",file.toUri().toASCIIString())
+                            .attr("alt",image.attr("alt"));
+                    trusted.put(token,preview.outerHtml());
+                    image.replaceWith(new org.jsoup.nodes.TextNode(token));
+                }catch(IOException ignored){ /* A superseded generation may have been removed. */ }
+            }
+            rendered=parsed.body().html();
+        }
         String safe = Jsoup.clean(rendered,allowed);
+        for(var image:trusted.entrySet())safe=safe.replace(image.getKey(),image.getValue());
         if (marker != null) safe = safe.replace(marker, "<a name='" + PICTURE_ANCHOR + "'></a>");
         return "<html><head><style>body {font-family:'Malgun Gothic';font-size:12pt;color:#302b40;margin:14px}"
                 +"h1,h2,h3 {color:#57419d;margin-top:10px;margin-bottom:8px} h1 {font-size:19pt} h2 {font-size:16pt}"

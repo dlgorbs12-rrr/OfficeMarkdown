@@ -101,7 +101,7 @@ final class UpdateDialog {
         private final Candidate candidate;
         private final JTextArea detail = new JTextArea(3, 38);
         private final JProgressBar progress = new JProgressBar();
-        private final JButton action = new JButton("다운로드");
+        private final JButton action = new JButton("업데이트");
         private final JButton releasePage = new JButton("릴리스 페이지 열기");
         private final JButton close = new JButton("나중에");
         private Thread worker;
@@ -117,7 +117,7 @@ final class UpdateDialog {
             heading.add(LibraryStyle.label("현재 버전 " + current, 14, false, LibraryStyle.MUTED));
             body.add(heading, BorderLayout.NORTH);
 
-            detail.setText(candidate.installed() ? "설치 파일을 다운로드하고 SHA-256을 확인합니다."
+            detail.setText(candidate.installed() ? "업데이트를 누르면 설치 파일의 SHA-256을 확인한 뒤 설치를 시작하고 앱을 종료합니다."
                     : "로컬 빌드와 휴대용 실행본은 릴리스 페이지에서 새 버전과 설치 안내를 확인하세요.");
             detail.setOpaque(false);
             detail.setEditable(false);
@@ -147,6 +147,7 @@ final class UpdateDialog {
             close.addActionListener(event -> dispose());
             releasePage.addActionListener(event -> browse());
             action.addActionListener(event -> {
+                if (!readyToInstall()) return;
                 if (installer == null) download();
                 else verifyForInstall();
             });
@@ -196,8 +197,7 @@ final class UpdateDialog {
                 detail.setText("설치 파일 다운로드 또는 SHA-256 확인에 실패했습니다. 다시 시도할 수 있습니다.");
                 return;
             }
-            action.setText("설치");
-            detail.setText("설치 파일의 SHA-256을 확인했습니다. 설치가 시작되면 Office Markdown이 종료됩니다.");
+            verifyForInstall();
         }
 
         private void setWorking(String cancelText) {
@@ -231,7 +231,7 @@ final class UpdateDialog {
 
         private boolean readyToInstall() {
             if (!busy.getAsBoolean()) return true;
-            detail.setText("진행 중인 작업이 끝나면 설치를 다시 눌러 주세요.");
+            detail.setText("진행 중인 작업이 끝나면 업데이트를 다시 눌러 주세요.");
             return false;
         }
 
@@ -245,7 +245,7 @@ final class UpdateDialog {
             if (!verified) {
                 discard(installer);
                 installer = null;
-                action.setText("다운로드");
+                action.setText("업데이트");
                 detail.setText("설치 파일이 변경되었거나 확인할 수 없습니다. 다시 다운로드하세요.");
                 return;
             }

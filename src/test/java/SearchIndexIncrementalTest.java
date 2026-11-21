@@ -15,7 +15,7 @@ class SearchIndexIncrementalTest {
         var first = note("첫 변환본");
         SearchIndex.search(library, "", SearchIndex.Scope.ALL, 10);
         note("색인 대기");
-        var file = library.resolve(".office-index-v1.sqlite");
+        var file = SearchIndex.database();
         try (var db = DriverManager.getConnection("jdbc:sqlite:" + file);
              var sql = db.createStatement()) {
             sql.execute("BEGIN IMMEDIATE");

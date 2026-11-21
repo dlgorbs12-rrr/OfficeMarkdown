@@ -1,5 +1,6 @@
 @echo off
 setlocal DisableDelayedExpansion
+set "OFFICEMD_MCP_RUNNER=%~dp0run-index-mcp.ps1"
 if exist "%~dp0local\tools\copilot\node_modules\@github\copilot-win32-x64\copilot.exe" set "PATH=%~dp0local\tools\copilot\node_modules\@github\copilot-win32-x64;%PATH%"
 set "BUILD_ID="
 if exist "%~dp0local\current.txt" set /p "BUILD_ID=" < "%~dp0local\current.txt"

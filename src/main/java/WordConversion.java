@@ -38,7 +38,15 @@ final class WordConversion {
                     writeHeading(section, out);
                 }
                 if (item instanceof XWPFParagraph paragraph) {
-                    if (!heading) writeParagraph(text, out);
+                    if (!heading){
+                        if(!text.isEmpty() && paragraph.getNumID()!=null && paragraph.getNumID().signum()>0){
+                            var depth=paragraph.getNumIlvl();
+                            int level=depth==null?0:Math.clamp(depth.intValue(),0,8);
+                            String format=paragraph.getNumFmt();
+                            String marker=format==null || format.equals("bullet")?"- ":"1. ";
+                            out.write("    ".repeat(level)+marker+Library.plain(text)+"\n");
+                        }else writeParagraph(text,out);
+                    }
                     writePictures(paragraph, section, pictures, out);
                 } else if (item instanceof XWPFTable table) {
                     writeTable(table, out);

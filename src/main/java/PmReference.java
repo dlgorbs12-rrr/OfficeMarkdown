@@ -9,7 +9,14 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
     enum Kind {
         WBS("WBS", List.of("시작일","종료일","담당","작업일정","task","duration")),
         ADAPTER("어댑터 설계서", List.of("인터페이스명","송신시스템","필드명","컬럼명","mapping","매핑","데이터타입")),
-        SURVEY("사전조사서", List.of("업무시스템","계정관리","권한관리","인증방식","로그인","연계방식","담당자"));
+        SURVEY("사전조사서", List.of("업무시스템","계정관리","권한관리","인증방식","로그인","연계방식","담당자")),
+        DESIGN("설계서",List.of("설계","구성","필드","인터페이스","정책")),
+        KICKOFF("착수보고서",List.of("추진","일정","범위","역할")),
+        PLAN("계획서",List.of("목표","일정","담당","범위")),
+        TEST("시험서·결과서",List.of("기대결과","실제결과","시나리오","검증")),
+        GUIDE("운영 가이드",List.of("절차","설정","관리","방법")),
+        PROPOSAL("제안서",List.of("제안","구성","요구사항","수행"));
+        @Override public String toString(){return label;}
         final String label;
         final List<String> markers;
         Kind(String label,List<String> markers){this.label=label;this.markers=markers;}
@@ -17,7 +24,20 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
 
     private static final Pattern SIGNAL=Pattern.compile("wbs|일정표|작업.?(일정|분해)|공정표|어댑터|어댑타|어뎁터|ad[ao]pt[eo]r",Pattern.CASE_INSENSITIVE);
     private static final Pattern SURVEY_NAME=Pattern.compile("사전[\\s_-]*조사(서|표|지)?");
-    static boolean applicable(String question){return SIGNAL.matcher(question).find()||SURVEY_NAME.matcher(question).find();}
+    static Kind classify(String text){
+        String s=fold(text);
+        if(s.contains("wbs")||s.contains("일정표"))return Kind.WBS;
+        if(s.contains("설계") && s.matches(".*(어댑터|어댑타|어뎁터|adapter|adaptor).*"))return Kind.ADAPTER;
+        if(SURVEY_NAME.matcher(s).find())return Kind.SURVEY;
+        if(s.contains("착수보고"))return Kind.KICKOFF;
+        if(s.contains("시험")||s.contains("테스트")||s.contains("검증결과"))return Kind.TEST;
+        if(s.contains("설계")||s.contains("정의서"))return Kind.DESIGN;
+        if(s.contains("계획서"))return Kind.PLAN;
+        if(s.contains("가이드")||s.contains("매뉴얼")||s.contains("운영지침"))return Kind.GUIDE;
+        if(s.contains("제안서"))return Kind.PROPOSAL;
+        return null;
+    }
+    static boolean applicable(String question){return SIGNAL.matcher(question).find()||classify(question)!=null;}
 
     static boolean surveyReference(String question){
         return SURVEY_NAME.matcher(question).find() && !SIGNAL.matcher(question).find()
@@ -39,12 +59,14 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
     static String prompt(String question){
         return """
                 NETS 프로젝트 PM이 찾는 참고자료를 해석하세요. 작성하려는 산출물과 찾을 원본을 구분하세요.
-                착수보고서에 넣을 작업 일정표는 WBS, 착수보고서 자체를 찾으면 OTHER입니다.
-                어댑터 명세나 매핑 사례는 ADAPTER, 제품 기능 문서나 다른 산출물은 OTHER입니다.
+                착수보고서에 넣을 작업 일정표는 WBS, 착수보고서 자체를 찾으면 KICKOFF입니다.
+                어댑터 명세는 ADAPTER, 설계서는 DESIGN, 계획서는 PLAN, 시험서는 TEST, 가이드는 GUIDE, 제안서는 PROPOSAL입니다. 유형을 특정하지 않으면 OTHER입니다.
                 IAM/SSO 사전조사서·사전조사표 작성에 참고할 양식이나 과거 조사서는 SURVEY입니다.
                 사전조사서에 넣을 다른 산출물을 명시했다면 요청한 원본 유형을 선택하세요.
-                JSON 배열 하나로 응답하세요. 첫 원소는 {"source":"WBS 또는 ADAPTER 또는 SURVEY 또는 OTHER",
+                JSON 배열 하나로 응답하세요. 첫 원소는 {"source":"위 유형 코드 또는 OTHER",
                 "ids":["질문에 나온 고객사명","대상 시스템명"],"topics":["찾는 시트나 표 주제의 짧은 명사"]} 입니다.
+                가이드·매뉴얼을 작성할 때 참고할 장절을 찾는 질문은 GUIDE입니다.
+                topics에는 제목의 주제와 찾는 장절의 주제를 각각 짧은 명사로 넣으세요.
                 식별어는 분리하고, 없는 명칭은 만들지 마세요. 나머지 원소는 일반 검색에 사용할 핵심 구절 문자열입니다.
                 질문: """ + question;
     }
@@ -56,7 +78,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
         try{return new PmReference(Kind.valueOf(obj.get("source").getAsString()),strings(obj,"ids"),strings(obj,"topics"));}
         catch(IllegalArgumentException e){return null;}
     }
-    private static List<String> strings(JsonObject obj,String key){
+    static List<String> strings(JsonObject obj,String key){
         var values=new LinkedHashSet<String>();
         if(obj.has(key)&&obj.get(key).isJsonArray()) for(var item:obj.getAsJsonArray(key)){
             if(!item.isJsonPrimitive()||!item.getAsJsonPrimitive().isString())continue;
@@ -74,7 +96,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
         return n;
     }
     private record Ranked(DocumentAgent.Claim claim,int score,int excerptScore){}
-    List<DocumentAgent.Claim> search(Connection db,SearchIndex.Focus focus)throws SQLException{
+    List<DocumentAgent.Claim> search(Connection db,SearchIndex.Focus focus,String question)throws SQLException{
         // In a title such as "AD Adaptor", only the separate AD token identifies the system.
         Map<String,Pattern> idPatterns=new LinkedHashMap<>();
         for(String id:identifiers)if(id.matches("[A-Za-z0-9]{1,3}"))
@@ -84,13 +106,26 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
             if(part.length()>1 && !List.of("항목","예시","시트","정보","정의","설계").contains(part))headingTerms.add(part);
         }
         var sectionClues=List.copyOf(headingTerms);
+        var sectionPhrases=new LinkedHashSet<String>();
+        for(String topic:topics){
+            var parts=RelevanceSearch.words(topic);
+            for(int i=1;i<parts.size();i++)sectionPhrases.add(parts.get(i-1)+parts.get(i));
+        }
+        // Keep relationships from the user's wording when the agent shortens or paraphrases a topic.
+        var questionTerms=RelevanceSearch.words(question);
+        for(int i=1;i<questionTerms.size();i++)
+            sectionPhrases.add(questionTerms.get(i-1)+questionTerms.get(i));
+        var phraseClues=List.copyOf(sectionPhrases);
         String title="lower(replace(replace(d.title,' ',''),'_',''))";
         String type=switch(kind){
             case WBS -> "("+title+" LIKE '%wbs%' OR "+title+" LIKE '%일정표%')";
             case ADAPTER -> "("+title+" LIKE '%설계%' AND ("+title+" LIKE '%어댑터%' OR "+title+" LIKE '%어뎁터%' OR "
                     +title+" LIKE '%adapter%' OR "+title+" LIKE '%adaptor%'))";
             case SURVEY -> "("+title+" LIKE '%사전조사%' OR replace(replace(lower(l.section),' ',''),'_','') LIKE '%사전조사%')";
+            default -> "0";
         };
+        // A manual role takes precedence, including an explicit unclassified selection.
+        type="(d.role='"+kind.name()+"' OR (d.role='' AND "+type+"))";
         String sql="SELECT d.md,d.source,d.title,l.section,substr(l.text,1,2000) FROM visible_docs d JOIN lines l ON l.doc=d.id "
                 +"WHERE "+type+" AND l.kind=2 AND l.text NOT LIKE '## %' AND l.text NOT LIKE '%| --- |%' "
                 +(focus==null?"":"AND d.md=? ")+(focus!=null && focus.section()!=null?"AND l.section=? ":"")+"ORDER BY d.id,l.id";
@@ -107,9 +142,16 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                         if(identifies(id,name,file,idPatterns))fileIds++;
                         if(identifies(id,line,body,idPatterns))rowIds++;
                     }
+                    if(kind!=Kind.ADAPTER && kind!=Kind.WBS && identifiers.stream().anyMatch(id ->
+                            !identifies(id,name,file,idPatterns) && !identifies(id,section,heading,idPatterns)
+                                    && !identifies(id,line,body,idPatterns)))continue;
                     int sectionTopics=matches(heading,sectionClues);
                     int rowTopics=matches(body,topics),markers=matches(body,kind.markers);
-                    int score=20*fileIds+3*rowIds+9*sectionTopics+3*rowTopics+Math.min(markers,4)*2;
+                    int titleTopics=matches(file,sectionClues);
+                    int score=20*fileIds+3*rowIds+9*sectionTopics+3*rowTopics+Math.min(markers,4)*2
+                            + 8*titleTopics + 15*matches(heading,phraseClues);
+                    if(!topics.isEmpty() && titleTopics+sectionTopics+rowTopics==0 && identifiers.isEmpty()
+                            && kind!=Kind.WBS && kind!=Kind.ADAPTER && kind!=Kind.SURVEY)continue;
                     String identityCue="",authCue="";
                     if(kind==Kind.SURVEY){
                         String context=file+" "+heading+" "+body;
@@ -133,7 +175,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                     }
                     var hit=new Library.Hit(Path.of(key.md()),Path.of(rs.getString(2)),name,section,line);
                     var evidence=new ArrayList<SearchIndex.Evidence>();
-                    String typeWord=switch(kind){case WBS->file.contains("wbs")?"WBS":"일정표";case ADAPTER->"설계";case SURVEY->"사전조사";};
+                    String typeWord=switch(kind){case WBS->file.contains("wbs")?"WBS":"일정표";case ADAPTER->"설계";case SURVEY->"사전조사";default->kind.label;};
                     if(file.contains(fold(typeWord)))evidence.add(new SearchIndex.Evidence(0,typeWord,"문서명",name));
                     else if(heading.contains(typeWord))evidence.add(new SearchIndex.Evidence(0,typeWord,"구역명",section));
                     for(String domain:List.of(identityCue,authCue))if(!domain.isEmpty()){
@@ -148,6 +190,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                     }
                     for(String id:identifiers){
                         if(identifies(id,name,file,idPatterns))evidence.add(new SearchIndex.Evidence(0,id,"문서명",name));
+                        else if(identifies(id,section,heading,idPatterns))evidence.add(new SearchIndex.Evidence(0,id,"구역명",section));
                         else if(identifies(id,line,body,idPatterns))evidence.add(new SearchIndex.Evidence(0,id,"구역 원문",clip(line,id)));
                         else missing.add(id);
                     }
@@ -161,9 +204,9 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
             }
         }
         var ordered=best.values().stream().sorted(Comparator.comparingInt(Ranked::score).reversed()).map(Ranked::claim);
-        if(kind==Kind.SURVEY){
+        if(kind!=Kind.WBS && kind!=Kind.ADAPTER){
             var documents=new HashSet<Path>();
-            ordered=ordered.filter(c->documents.add(c.proof().md()));
+            ordered=ordered.filter(c->documents.add(c.proof().source()));
         }
         return ordered.limit(50).toList();
     }
