@@ -441,7 +441,7 @@ final class SearchIndex {
             }
         }
 
-        private void importLegacy() throws SQLException {
+        private void importLegacy() throws SQLException, IOException {
             Path old = library.resolve(DATABASE);
             if (old.equals(database()) || !Files.isRegularFile(old)) return;
             try (var check = db.prepareStatement("SELECT imported FROM folders WHERE path=?")) {
@@ -471,6 +471,23 @@ final class SearchIndex {
                 SlideSearch.indexSelected(db, "SELECT d.id FROM main.docs d JOIN incoming i ON i.md=d.md WHERE lower(d.source) LIKE '%.pptx'");
             if (tables.contains("pictures"))
                 sql.executeUpdate("INSERT INTO main.pictures(doc,path,location,section,text,folded) SELECT d.id,v.path,v.location,v.section,v.text,v.folded FROM legacy.pictures v" + join);
+            if (tables.contains("evidence_version"))
+                sql.executeUpdate("""
+                        INSERT INTO main.evidence_version(doc,hash,generation)
+                        SELECT d.id,v.hash,v.generation FROM legacy.evidence_version v
+                        JOIN incoming i ON i.id=v.doc JOIN main.docs d ON d.md=i.md
+                        """);
+            if (ReferenceIndex.installed(db)) {
+                ReferenceIndex.indexSelected(db, """
+                        SELECT d.id FROM main.docs d JOIN incoming i ON i.md=d.md
+                        JOIN evidence_version v ON v.doc=d.id WHERE lower(d.source) LIKE '%.pptx'
+                        """);
+                ReferenceIndex.queueLegacy(db, """
+                        SELECT d.id FROM main.docs d JOIN incoming i ON i.md=d.md
+                        WHERE lower(d.source) LIKE '%.pptx'
+                        AND NOT EXISTS (SELECT 1 FROM evidence_version v WHERE v.doc=d.id)
+                        """);
+            }
             for (String table : List.of("large_allowed","large_pending")) {
                 if (tables.contains(table)) {
                     try (var rows = sql.executeQuery("SELECT * FROM legacy." + table);
@@ -536,9 +553,10 @@ final class SearchIndex {
             sql.execute("BEGIN IMMEDIATE");
             try {
                 boolean hold = holdLarge();
+                boolean reference = !removeOnly && ReferenceIndex.installed(db);
                 for (Path note : notes) {
                     checkInterrupted();
-                    Outcome outcome = removeOnly ? removeMissing(note) : index(note, hold);
+                    Outcome outcome = removeOnly ? removeMissing(note) : index(note, hold, reference);
                     if (outcome == Outcome.UNCHANGED || outcome == Outcome.UPDATED) indexed++;
                     if (outcome == Outcome.UPDATED) updated++;
                     if (outcome == Outcome.DEFERRED) deferred++;
@@ -593,7 +611,7 @@ final class SearchIndex {
             return remove.executeUpdate() == 0 ? Outcome.SKIPPED : Outcome.REMOVED;
         }
 
-        private Outcome index(Path file, boolean hold) throws SQLException, IOException {
+        private Outcome index(Path file, boolean hold, boolean reference) throws SQLException, IOException {
             var attrs = attributes(file);
             if (attrs == null) return removeMissing(file);
             if (!attrs.isRegularFile()) return removeMissing(file);
@@ -636,7 +654,7 @@ final class SearchIndex {
                         if (sourceHash == null) sourceHash = EvidenceIndex.parseHeader(value);
                     }
                     String manifestStamp = PictureAssets.manifestStamp(file, generation);
-                    writeNote(file, stamp, source, heading.substring(2), generation, manifestStamp, sourceHash, in, value);
+                    writeNote(file, stamp, source, heading.substring(2), generation, manifestStamp, sourceHash, in, value, reference);
                     outcome = manifestStamp.equals(PictureAssets.manifestStamp(file, generation))
                             ? Outcome.UPDATED : Outcome.SKIPPED;
                 }
@@ -652,7 +670,8 @@ final class SearchIndex {
         }
 
         private void writeNote(Path file, String stamp, Path source, String title, String generation,
-                               String manifestStamp, String sourceHash, BufferedReader in, String value) throws SQLException, IOException {
+                               String manifestStamp, String sourceHash, BufferedReader in, String value,
+                               boolean referenceEnabled) throws SQLException, IOException {
             doc.setString(1, file.toString());
             doc.setString(2, stamp + "\n" + Objects.toString(generation, "") + "\n" + manifestStamp);
             doc.setString(3, source.toString());
@@ -695,8 +714,13 @@ final class SearchIndex {
                 add(line, id, 2, section, value);
             }
             inferRole(file,id,title);
-            if (source.toString().toLowerCase(Locale.ROOT).endsWith(".pptx") && SlideSearch.installed(db))
-                SlideSearch.indexDocument(db,id);
+            if (source.toString().toLowerCase(Locale.ROOT).endsWith(".pptx")) {
+                if (SlideSearch.installed(db)) SlideSearch.indexDocument(db,id);
+                if (referenceEnabled) {
+                    if (sourceHash != null && generation != null) ReferenceIndex.indexDocument(db,id);
+                    else ReferenceIndex.queueLegacy(db,id);
+                }
+            }
         }
 
         private void inferRole(Path note,long id,String title)throws SQLException{
@@ -730,6 +754,13 @@ final class SearchIndex {
 
     private static String stamp(BasicFileAttributes attrs) {
         return attrs.lastModifiedTime() + "/" + attrs.size() + "/" + attrs.fileKey();
+    }
+
+    static String noteStamp(Path note, String generation) throws IOException {
+        var attrs = attributes(note);
+        if (attrs == null || !attrs.isRegularFile()) return null;
+        String manifest = PictureAssets.manifestStamp(note, generation);
+        return stamp(attrs) + "\n" + Objects.toString(generation, "") + "\n" + manifest;
     }
 
     private static Path original(String link) {

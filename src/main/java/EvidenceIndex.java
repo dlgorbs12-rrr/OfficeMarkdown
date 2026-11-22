@@ -53,6 +53,10 @@ final class EvidenceIndex {
         return HexFormat.of().formatHex(digest.digest());
     }
 
+    static String sourceHash(Path source) throws IOException {
+        return copyDigest(source, OutputStream.nullOutputStream());
+    }
+
     record Snapshot(Path file, String hash) implements AutoCloseable {
         static Snapshot capture(Path source, Path folder) throws IOException {
             Path temp = Files.createTempFile(folder,".relation-source-",".tmp");
@@ -61,7 +65,7 @@ final class EvidenceIndex {
             } catch (IOException | RuntimeException e) { Files.deleteIfExists(temp); throw e; }
         }
         void check(Path source) throws IOException {
-            if (!hash.equals(copyDigest(source,OutputStream.nullOutputStream()))) throw new Changed();
+            if (!hash.equals(sourceHash(source))) throw new Changed();
         }
         public void close() throws IOException { Files.deleteIfExists(file); }
     }
@@ -117,7 +121,7 @@ final class EvidenceIndex {
             if (Files.notExists(note) || Files.notExists(v.source)) state = State.MISSING;
             else if (v.hash == null) state = State.UNVERSIONED;
             else if (!v.generation.equals(PictureAssets.currentGeneration(note)) ||
-                    !v.hash.equals(copyDigest(v.source,OutputStream.nullOutputStream()))) state = State.STALE;
+                    !v.hash.equals(sourceHash(v.source))) state = State.STALE;
             else if (v.extractor == null) state = State.PENDING;
             else state = v.extractor.equals(extractor) ? State.READY : State.STALE;
         } catch (NoSuchFileException e) { state = State.MISSING; }
