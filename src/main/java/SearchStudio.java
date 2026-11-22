@@ -1,6 +1,7 @@
 import java.awt.*;
 import java.awt.geom.RoundRectangle2D;
 import java.util.Locale;
+import java.nio.file.Path;
 import java.util.function.Function;
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -227,6 +228,10 @@ final class SearchStudio {
             caption.setBackground(selected ? SELECTED : PAPER);
             caption.add(LibraryStyle.label(name(hit),14,true,LibraryStyle.INK));
             String where = hit.picture()==null ? hit.section() : hit.picture().location();
+            if(!hit.otherSources().isEmpty()){
+                where+=" · 다른 사본 "+hit.otherSources().size()+"건";
+                outer.setToolTipText(String.join(" · ",hit.otherSources().stream().map(Path::toString).toList()));
+            }else outer.setToolTipText(null);
             caption.add(LibraryStyle.label(format + " · " + where,12,false,LibraryStyle.MUTED));
             card.add(caption,BorderLayout.SOUTH);
             return outer;

@@ -50,6 +50,10 @@ final class SlideSearch {
     }
 
     static String match(String query) {
+        return match(query,false);
+    }
+
+    static String match(String query,boolean contextual) {
         var groups = new LinkedHashSet<String>();
         String normalized = query.toLowerCase(Locale.ROOT).replace("다른 사람 대신", "대리");
         var stems = new LinkedHashSet<String>();
@@ -73,6 +77,26 @@ final class SlideSearch {
                 groups.add("((" + literal + ") OR (" + heading + "))");
             }
         }
+        var aliases=new HashMap<String,List<String>>();
+        if(contextual){
+            var tokens=WORD.matcher(normalized);
+            var run=new ArrayDeque<String>();
+            int end=0;
+            while(tokens.find()){
+                String stem=SUFFIX.matcher(tokens.group()).replaceFirst("");
+                if(!normalized.substring(end,tokens.start()).isBlank())run.clear();
+                end=tokens.end();
+                if(!stems.contains(stem)||!hangul(stem)){run.clear();continue;}
+                run.addLast(stem);
+                if(run.size()>3)run.removeFirst();
+                var span=new ArrayList<>(run);
+                for(int start=0;start<span.size()-1;start++){
+                    var phrase=span.subList(start,span.size());
+                    String alias="aliases:\""+String.join("",phrase)+"\"";
+                    for(String token:phrase)aliases.computeIfAbsent(token,k->new ArrayList<>()).add(alias);
+                }
+            }
+        }
         for (String stem : stems) {
             // Terms come only from the alphanumeric tokenizer, never from raw FTS syntax.
             String group = switch (stem) {
@@ -83,9 +107,12 @@ final class SlideSearch {
                 case "화면", "페이지" -> "(\"화면\"* OR \"페이지\"*)";
                 default -> prefix(stem);
             };
-            groups.add(group);
+            groups.add(aliases.containsKey(stem)?"("+group+" OR "+String.join(" OR ",aliases.get(stem))+")":group);
         }
-        return String.join(" AND ", groups);
+        String expression=String.join(" AND ", groups);
+        if(contextual && !groups.isEmpty())
+            expression+=" AND {heading body aliases}:("+String.join(" OR ",groups)+")";
+        return expression;
     }
 
     private static String prefix(String word) {
@@ -106,22 +133,41 @@ final class SlideSearch {
             sql.execute("PRAGMA foreign_keys=ON");
             sql.execute("BEGIN IMMEDIATE");
             try {
-                if (!installed(db)) {
-                    sql.execute("CREATE TABLE slide_pages(id INTEGER PRIMARY KEY, doc INTEGER NOT NULL REFERENCES docs ON DELETE CASCADE,"
-                            + "section TEXT NOT NULL, heading TEXT NOT NULL, body TEXT NOT NULL, UNIQUE(doc,section))");
-                    sql.execute("CREATE VIRTUAL TABLE slide_terms USING fts5(heading,body,content='slide_pages',content_rowid='id',prefix='2 3')");
-                    sql.execute("CREATE TRIGGER slide_terms_add AFTER INSERT ON slide_pages BEGIN "
-                            + "INSERT INTO slide_terms(rowid,heading,body) VALUES(new.id,new.heading,new.body); END");
-                    sql.execute("CREATE TRIGGER slide_terms_del AFTER DELETE ON slide_pages BEGIN "
-                            + "INSERT INTO slide_terms(slide_terms,rowid,heading,body) VALUES('delete',old.id,old.heading,old.body); END");
-                    sql.execute("INSERT INTO slide_terms(slide_terms,rank) VALUES('rank','bm25(6.0,1.0)')");
-                    indexSelected(db,"SELECT id FROM docs WHERE lower(source) LIKE '%.pptx'");
-                }
+                ensureCurrent(db,sql);
                 sql.execute("COMMIT");
             } catch (SQLException | RuntimeException failure) {
                 sql.execute("ROLLBACK");
                 throw failure;
             }
+        }
+    }
+
+    static void ensureCurrent(Connection db, Statement sql) throws SQLException {
+        upgrade(db);
+        if (!installed(db)) {
+            sql.execute("CREATE TABLE slide_pages(id INTEGER PRIMARY KEY, doc INTEGER NOT NULL REFERENCES docs ON DELETE CASCADE,"
+                    + "section TEXT NOT NULL, heading TEXT NOT NULL, body TEXT NOT NULL, context TEXT, aliases TEXT, UNIQUE(doc,section))");
+            sql.execute("CREATE VIRTUAL TABLE slide_terms USING fts5(heading,body,context,aliases,content='slide_pages',content_rowid='id',prefix='2 3')");
+            sql.execute("CREATE TRIGGER slide_terms_add AFTER INSERT ON slide_pages BEGIN "
+                    + "INSERT INTO slide_terms(rowid,heading,body,context,aliases) VALUES(new.id,new.heading,new.body,new.context,new.aliases); END");
+            sql.execute("CREATE TRIGGER slide_terms_del AFTER DELETE ON slide_pages BEGIN "
+                    + "INSERT INTO slide_terms(slide_terms,rowid,heading,body,context,aliases) VALUES('delete',old.id,old.heading,old.body,old.context,old.aliases); END");
+            sql.execute("INSERT INTO slide_terms(slide_terms,rank) VALUES('rank','bm25(6.0,1.0,0.35,2.0)')");
+            indexSelected(db,"SELECT id FROM docs WHERE lower(source) LIKE '%.pptx'");
+        }
+    }
+
+    private static boolean contextual(Connection db) throws SQLException {
+        try(var q=db.createStatement();var r=q.executeQuery("SELECT 1 FROM pragma_table_info('slide_pages') WHERE name='context'")){
+            return r.next();
+        }
+    }
+
+    private static void upgrade(Connection db) throws SQLException {
+        if(!installed(db) || contextual(db))return;
+        try(var q=db.createStatement()){
+            q.execute("DROP TABLE slide_pages");
+            q.execute("DROP TABLE slide_terms");
         }
     }
 
@@ -132,17 +178,22 @@ final class SlideSearch {
     }
 
     static void indexDocument(Connection db, long doc) throws SQLException {
-        try (var q = db.prepareStatement("SELECT section,text FROM lines WHERE doc=? AND kind=2 ORDER BY section,id");
-             var insert = db.prepareStatement("INSERT INTO slide_pages(doc,section,heading,body) VALUES(?,?,?,?)")) {
+        boolean extended=contextual(db);
+        try (var q = db.prepareStatement("SELECT l.section,l.text,d.title FROM lines l JOIN docs d ON d.id=l.doc WHERE doc=? AND kind=2 ORDER BY l.id");
+             var insert = db.prepareStatement(extended?"INSERT INTO slide_pages(doc,section,heading,body,context,aliases) VALUES(?,?,?,?,?,?)":"INSERT INTO slide_pages(doc,section,heading,body) VALUES(?,?,?,?)")) {
             q.setLong(1, doc);
             insert.setLong(1, doc);
             try (var rows = q.executeQuery()) {
-                String section = null, heading = "";
+                String section = null, heading = "", deck="", divider="";
                 var body = new StringBuilder();
                 while (rows.next()) {
                     String current = rows.getString(1);
                     if (!Objects.equals(current, section)) {
-                        if (section != null) save(insert, section, heading, body);
+                        if (section != null) {
+                            save(insert, section, heading, body,deck,divider,extended);
+                            if(isDivider(heading,body.toString()))divider=heading;
+                        }
+                        deck=rows.getString(3);
                         section = PAGE.matcher(current).matches() ? current : null;
                         heading = "";
                         body.setLength(0);
@@ -153,20 +204,45 @@ final class SlideSearch {
                     if (body.isEmpty() && !value.startsWith("|")) heading = value;
                     body.append(value).append('\n');
                 }
-                if (section != null) save(insert, section, heading, body);
+                if (section != null) save(insert, section, heading, body,deck,divider,extended);
             }
         }
     }
 
-    private static void save(PreparedStatement insert, String section, String heading, StringBuilder body) throws SQLException {
+    private static boolean hangul(String word){return !word.isEmpty() && word.chars().allMatch(c->c>='가' && c<='힣');}
+
+    static boolean isDivider(String heading,String body){
+        return !heading.isBlank() && heading.length()<=70 && body.strip().equals(heading);
+    }
+
+    static String aliases(String heading){
+        var result=new LinkedHashSet<String>();
+        var previous=new ArrayDeque<String>();
+        var words=WORD.matcher(heading);
+        int end=0;
+        while(words.find()){
+            if(!heading.substring(end,words.start()).isBlank())previous.clear();
+            end=words.end();
+            String word=words.group();
+            if(!hangul(word)){previous.clear();continue;}
+            previous.addLast(word);
+            if(previous.size()>3)previous.removeFirst();
+            String suffix="";
+            for(var it=previous.descendingIterator();it.hasNext();){suffix=it.next()+suffix;result.add(suffix);}
+        }
+        return String.join(" ",result);
+    }
+
+    private static void save(PreparedStatement insert, String section, String heading, StringBuilder body,String deck,String divider,boolean extended) throws SQLException {
         insert.setString(2,section);
         insert.setString(3,heading);
         insert.setString(4,body.toString());
+        if(extended){insert.setString(5,deck+" "+divider);insert.setString(6,aliases(heading));}
         insert.executeUpdate();
     }
 
     static List<Library.Hit> search(Connection db, String query, int limit, boolean hasQueue) throws SQLException {
-        String terms = match(query);
+        String terms = match(query,contextual(db));
         if (terms.isEmpty()) return List.of();
         var hits = new ArrayList<Library.Hit>();
         record Position(String source, String section) {}

@@ -41,3 +41,6 @@ copilot mcp add office -- powershell.exe @serverArgs
 2. 상위 후보의 핸들을 `read_reference_slide`에 전달해 원본 장표 텍스트와 현재 버전을 확인한다. 다음 참고 장표 검색을 시작하면 이전 핸들은 만료된다.
 
 외부 MCP 클라이언트는 후보를 선택하고 판독하는 자체 모델을 사용한다. 앱의 AI 검색에서는 상위 4장까지 한 번에 판독하고, 원본 인용을 확인한 장표를 최대 3장 표시한다.
+## 자연어 문서 검색
+
+외부 에이전트는 일반 질문을 `search_documents`에 전달한다. 예를 들어 “AD 어댑터 설계 초본을 만들기 위한 자료 탐색”으로 후보를 찾은 뒤, 후보의 `document`로 `list_sections`와 `read_evidence`를 호출해 원문을 확인한다. 정확한 부분 문자열을 찾을 때는 `search`, 참고용 장표를 찾을 때는 `search_reference_slides`를 사용한다. 앱 대화에서 체크한 검색 대상은 해당 대화의 MCP 세션에 적용된다. 별도로 등록한 외부 MCP는 보관함 전체에서 검색한다.
