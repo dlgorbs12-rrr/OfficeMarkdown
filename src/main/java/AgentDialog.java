@@ -63,7 +63,7 @@ final class AgentDialog extends JPanel {
     private SwingWorker<?,?> previewTask;
     private SwingWorker<McpSearch.Reply,String> task;
 
-    boolean isAnswering() { return task != null && !task.isDone(); }
+    boolean isAnswering() { return (task != null && !task.isDone()) || slideTask!=null; }
 
     AgentDialog(Path library,Consumer<Library.Hit> preview,Consumer<Library.Hit> openOriginal){
         super(new BorderLayout());
@@ -323,13 +323,14 @@ final class AgentDialog extends JPanel {
         if(slideTask!=null){slideTask.cancel(true);slideTask=null;}
         if(searchingPanel!=null){searchingPanel.busy(false);searchingPanel.setStatus("검색이 중단되었습니다.");searchingPanel=null;}
     }
-    private void findSelectedSlides(FoundDocuments panel,String prompt,String expanded,SearchIndex.Focus focus,List<String> notes){
+    private void findSelectedSlides(FoundDocuments panel,String prompt,String context,String expanded,SearchIndex.Focus focus,List<String> notes){
         cancelSlideSearch();
         var reader=ReferenceSearch.reader((DocumentAgent.Provider)providers.getSelectedItem(),modelId,reasoning,usage->{});
+        DocumentAgent.Ask contextual=context.isBlank()?reader:instruction->reader.run("이전 대화 (현재 질문의 생략된 조건 확인용):\n"+context+"\n현재 작업:\n"+instruction);
         searchingPanel=panel;panel.busy(true);panel.setStatus("선택한 문서에서 장표 확인 중…");
         slideTask=new SwingWorker<>(){
             protected McpSearch.Reply doInBackground() throws Exception{
-                return McpSearch.selectedSlides(prompt,expanded,focus,notes,reader,this::publish);
+                return McpSearch.selectedSlides(prompt,expanded,focus,notes,contextual,this::publish);
             }
             protected void process(List<String> updates){if(slideTask==this)panel.setStatus(updates.getLast());}
             protected void done(){
@@ -347,7 +348,7 @@ final class AgentDialog extends JPanel {
         };slideTask.execute();
     }
 
-    private void displayReply(JPanel body,McpSearch.Reply reply,String prompt,SearchIndex.Focus scope){
+    private void displayReply(JPanel body,McpSearch.Reply reply,String prompt,String context,SearchIndex.Focus scope){
         var citations=new java.util.LinkedHashMap<String,DocumentAgent.Claim>();
         for(var source:reply.sources())citations.put(source.answer(),source);
         var message=new JEditorPane("text/html",MarkdownReader.chatHtml(reply.text(),citations.keySet())){
@@ -383,7 +384,7 @@ final class AgentDialog extends JPanel {
         }
         if(!reply.candidates().isEmpty()){
             var panel=new FoundDocuments(reply.candidates());
-            panel.onSearch(notes->findSelectedSlides(panel,prompt,reply.expanded(),scope,notes));
+            panel.onSearch(notes->findSelectedSlides(panel,prompt,context,reply.expanded(),scope,notes));
             var reopen=new JButton("이 답변에서 찾은 문서 보기");
             reopen.addActionListener(e->showFound(panel));body.add(reopen);showFound(panel);
         }
@@ -762,7 +763,7 @@ final class AgentDialog extends JPanel {
             protected void done(){
                 try{
                     var reply=get();
-                    displayReply(response,reply,text,scope);
+                    displayReply(response,reply,text,context,scope);
                     String exchange="사용자: "+text+"\n에이전트: "+reply.text();
                     history.addLast(exchange.substring(0,Math.min(exchange.length(),4000)));
                     while(history.size()>4)history.removeFirst();

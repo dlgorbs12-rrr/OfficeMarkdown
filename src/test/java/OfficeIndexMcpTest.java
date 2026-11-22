@@ -7,6 +7,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OfficeIndexMcpTest {
     @TempDir Path root;
+    @Test void candidateChatCannotInspectSlidesBeforeUserSelection() throws Exception {
+        Files.writeString(root.resolve("config"),OfficeIndexMcp.JSON.toJson(Map.of("root",root.toString(),"deferSlides",true)));
+        Files.createFile(root.resolve("activity"));
+        var server=new OfficeIndexMcp(root);
+        var tools=OfficeIndexMcp.JSON.toJson(server.respond(json("{'method':'tools/list'}")));
+        assertTrue(tools.contains("search_documents"));
+        for(String name:OfficeIndexMcp.SLIDE_TOOLS){
+            assertFalse(tools.contains(name));
+            assertThrows(IllegalArgumentException.class,()->server.call(name,json("{}")));
+        }
+    }
     @Test void checkedDocumentsLimitAllAgentEvidenceAndAnEmptySelectionStaysEmpty() throws Exception {
         var notes=new ArrayList<String>();
         for(String name:List.of("one","two","unselected")){

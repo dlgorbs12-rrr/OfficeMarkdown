@@ -7,6 +7,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SelectedSlidesTest {
     @TempDir Path folder;
+    @Test void manyMatchingSlidesInOneDeckLeaveRoomForOtherDecks() throws Exception {
+        var library=folder.resolve("notes");
+        var notes=new ArrayList<Path>();
+        for(String name:List.of("A","B")){
+            var source=folder.resolve(name+".pptx");
+            try(var deck=new XMLSlideShow();var out=Files.newOutputStream(source)){
+                for(int i=0;i<(name.equals("A")?24:1);i++)deck.createSlide().createTextBox().setText("architecture");
+                deck.write(out);
+            }
+            notes.add(Library.convert(source,library));
+        }
+        SearchIndex.indexCompleted(library,notes);
+        var reply=McpSearch.slideDocuments("architecture",null,null,prompt->"[]",status->{});
+        assertEquals(2,reply.candidates().size());
+    }
     @Test void candidateDiscoveryThenOnlyCheckedDecksAreInspected() throws Exception {
         var notes=new ArrayList<Path>();
         var library=folder.resolve("notes");

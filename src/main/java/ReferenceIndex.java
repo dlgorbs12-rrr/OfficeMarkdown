@@ -447,12 +447,12 @@ final class ReferenceIndex {
             var files = new LiveFiles();
             var scores = new HashMap<Key, Scored>();
             addRanks(scores, ranked(db, "reference_body_terms", "bm25(reference_body_terms,6.0,1.0)",
-                    match, focus, files, allowed));
+                    match, focus, files, allowed, distinctDocs));
             addRanks(scores, ranked(db, "reference_caption_terms", "bm25(reference_caption_terms)",
-                    match, focus, files, allowed));
+                    match, focus, files, allowed, distinctDocs));
             String contextual=SlideSearch.match(original,true);
             if(!contextual.isEmpty() && table(db,"reference_context_terms"))
-                addRanks(scores,ranked(db,"reference_context_terms","bm25(reference_context_terms,6,1,0.35,2)",contextual,focus,files,allowed));
+                addRanks(scores,ranked(db,"reference_context_terms","bm25(reference_context_terms,6,1,0.35,2)",contextual,focus,files,allowed,distinctDocs));
             var result = new ArrayList<Page>(LIMIT);
             try (var text = db.prepareStatement("SELECT text FROM reference_pages WHERE id=?")) {
                 var seen=new HashSet<Path>();
@@ -495,13 +495,14 @@ final class ReferenceIndex {
     }
 
     private static List<Ranked> ranked(Connection db, String table, String score, String match,
-                                       SearchIndex.Focus focus, LiveFiles files, String allowed) throws SQLException {
+                                       SearchIndex.Focus focus, LiveFiles files, String allowed, boolean distinctDocs) throws SQLException {
         String restrict = focus == null ? "" : " AND d.md=?" + (focus.section() == null ? "" : " AND p.section=?");
         String sql = "SELECT " + IDENTITY + ",p.id" + VISIBLE + " JOIN " + table + " ON " + table + ".rowid=p.id"
                 + " WHERE " + table + " MATCH ?" + restrict + membership(allowed)
                 + " ORDER BY " + score + ",d.source,p.number,v.hash,d.md";
         var best = new ArrayList<Ranked>(LIMIT);
         var seen = new HashSet<Key>();
+        var seenDocs = new HashSet<Path>();
         try (var q = db.prepareStatement(sql)) {
             q.setString(1, match);
             if (allowed != null) q.setString(focus == null ? 2 : focus.section() == null ? 3 : 4, allowed);
@@ -512,7 +513,8 @@ final class ReferenceIndex {
             try (var rows = q.executeQuery()) {
                 while (best.size() < LIMIT && !Thread.currentThread().isInterrupted() && rows.next()) {
                     var item = indexed(rows);
-                    if (!seen.contains(item.key()) && files.current(item)) {
+                    if ((!distinctDocs || !seenDocs.contains(item.note)) && !seen.contains(item.key()) && files.current(item)) {
+                        if(distinctDocs)seenDocs.add(item.note);
                         seen.add(item.key());
                         best.add(new Ranked(item, rows.getLong(9)));
                     }
