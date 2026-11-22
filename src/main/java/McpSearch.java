@@ -50,14 +50,22 @@ final class McpSearch {
 
     record Reply(String text,List<DocumentAgent.Claim> sources) {}
 
+    enum Route { ADAPTER, SLIDES, CHAT }
+
+    static Route route(String question,String history,PmReference adapter,boolean slidesEnabled) {
+        if(adapter!=null)return history==null || history.isBlank() ? Route.ADAPTER : Route.CHAT;
+        return slidesEnabled && ReferenceSearch.requested(question) ? Route.SLIDES : Route.CHAT;
+    }
+
     static Reply chat(DocumentAgent.Provider provider,Path library,String question,String history,String model,
                       DocumentAgent.Effort effort,SearchIndex.Focus focus,Consumer<String> activity) throws Exception {
-        var adapter = AdapterDiscovery.plan(question,history);
-        if (adapter != null) {
+        var adapter = AdapterDiscovery.plan(question);
+        var route = route(question,history,adapter,ReferenceSearch.enabled());
+        if (route == Route.ADAPTER) {
             activity.accept("대상 시스템이 명시된 어댑터 설계서를 확인하는 중…");
             return AdapterDiscovery.find(adapter,focus,question);
         }
-        if(ReferenceSearch.enabled() && ReferenceSearch.requested(question)){
+        if(route == Route.SLIDES){
             var recommendations=ReferenceSearch.search(question,focus,provider,model,effort,activity);
             var claims=new ArrayList<DocumentAgent.Claim>();
             var message=new StringBuilder();
