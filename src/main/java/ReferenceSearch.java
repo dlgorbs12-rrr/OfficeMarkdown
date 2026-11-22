@@ -9,12 +9,20 @@ final class ReferenceSearch {
     private static final Pattern SLIDE = Pattern.compile("장표|슬라이드|구성도|구조도|배치도|흐름도|아키텍처|"
             + "(?:비교|절차) 그림|그림.{0,18}(있을까|필요|참고)|한\\s*장.{0,12}(필요|보고|설명)|"
             + "(?:pptx?|slides?|architecture diagram)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern REFERENCE_REQUEST = Pattern.compile(
+            "찾아|찾고|찾을|찾는|검색|추천|보여|필요|있을까|있나요|있어\\s*\\?|참고할|참고용|찾기");
+    private static final Pattern DOCUMENT_REQUEST = Pattern.compile(
+            "(?:설계서|계획서|보고서|명세서|매뉴얼|문서)(?:를|을|만|부터)?\\s*(?:찾|검색|추천|보여|필요|있)");
+    private static final Pattern INSTRUCTION_REQUEST = Pattern.compile(
+            "(?:방법|하는\\s*법|사용법|하는지|절차)(?:을|를|가)?\\s*(?:알려|설명|궁금|찾아)|어떻게.{0,18}(?:저장|변환|내보내)");
     private static final Pattern EXACT = Pattern.compile("(?i)(?:\\b[A-Z]{2,8}-[0-9]+\\b|\\b[A-Z]{1,3}[1-9][0-9]*\\b|엑셀|스프레드시트|\\.xlsx?\\b)");
     private static final int LIMIT = 4;
     record Recommendation(ReferenceIndex.Page page, String reason, String quote) {}
     record Trace(List<ReferenceIndex.Page> candidates,List<ReferenceIndex.Page> inspected,List<Recommendation> recommended) {}
     static boolean requested(String question) {
-        return question!=null && question.length()<=1200 && !EXACT.matcher(question).find() && SLIDE.matcher(question).find();
+        return question!=null && question.length()<=1200 && !EXACT.matcher(question).find() && SLIDE.matcher(question).find()
+                && REFERENCE_REQUEST.matcher(question).find() && !DOCUMENT_REQUEST.matcher(question).find()
+                && !INSTRUCTION_REQUEST.matcher(question).find();
     }
     static String model(DocumentAgent.Provider provider,String selected) {
         return provider==DocumentAgent.Provider.CODEX && selected.isBlank() ? "gpt-6.1-terra" : selected;
