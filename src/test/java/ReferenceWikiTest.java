@@ -37,6 +37,39 @@ class ReferenceWikiTest {
             assertNull(english.getFontFamily(east));
         }
     }
+    @Test void previewDoesNotPaintShadowsOfUnfilledShapesOverContent() throws Exception {
+        Path source = directory.resolve("그림자 검증.pptx");
+        try (var show = new XMLSlideShow(); var output = Files.newOutputStream(source)) {
+            show.setPageSize(new Dimension(960, 540));
+            var slide = show.createSlide();
+            var content = slide.createAutoShape();
+            content.setShapeType(ShapeType.RECT);
+            content.setAnchor(new Rectangle2D.Double(80, 80, 800, 360));
+            content.setFillColor(Color.RED);
+            var frame = slide.createAutoShape();
+            frame.setShapeType(ShapeType.RECT);
+            frame.setAnchor(new Rectangle2D.Double(60, 60, 840, 400));
+            frame.setLineColor(Color.GRAY);
+            var properties = ((org.openxmlformats.schemas.presentationml.x2006.main.CTShape) frame.getXmlObject()).getSpPr();
+            if (!properties.isSetNoFill()) properties.addNewNoFill();
+            var shadow = properties.addNewEffectLst().addNewOuterShdw();
+            shadow.setBlurRad(38100);
+            shadow.setDist(12700);
+            shadow.setDir(5400000);
+            var color = shadow.addNewPrstClr();
+            color.setVal(org.openxmlformats.schemas.drawingml.x2006.main.STPresetColorVal.BLACK);
+            color.addNewAlpha().setVal(20000);
+            show.write(output);
+        }
+        index(source);
+        ReferenceIndex.prepare();
+        var image = ReferenceWiki.preview(ReferenceIndex.pages(source).getFirst());
+        assertEquals(Color.RED.getRGB(), colorOf(image));
+        var original = Files.readAllBytes(source);
+        ReferenceWiki.preview(ReferenceIndex.pages(source).getFirst());
+        assertArrayEquals(original, Files.readAllBytes(source));
+    }
+
     @Test void rendersAndDescribesTheConvertedSlideOrder() throws Exception {
         Path source = directory.resolve("순서 검증.pptx");
         writeDeck(source, true, Color.RED, Color.BLUE);
