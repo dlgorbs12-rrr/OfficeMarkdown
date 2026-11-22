@@ -379,8 +379,8 @@ final class AgentDialog extends JPanel {
                 large.addActionListener(e->showSelected(claim));body.add(large);
             }
         }
-        if(reply.candidates().isEmpty() && reply.expanded()!=null){
-            var empty=new FoundDocuments(List.of());empty.setStatus("이번 질문에서 찾은 PPTX 문서가 없습니다.");showFound(empty);
+        if(reply.candidates().isEmpty()){
+            var empty=new FoundDocuments(List.of());empty.setStatus("이번 답변에서 찾은 문서가 없습니다.");showFound(empty);
         }
         if(!reply.candidates().isEmpty()){
             var panel=new FoundDocuments(reply.candidates());

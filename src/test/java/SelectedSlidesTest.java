@@ -7,6 +7,33 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SelectedSlidesTest {
     @TempDir Path folder;
+    @Test void emptyFollowUpClearsTheActiveSelectionButEarlierReplyCanReopenIt() throws Exception {
+        var check=new java.util.concurrent.FutureTask<Void>(()->{
+            var chat=new AgentDialog(folder,hit->{},hit->{});
+            var display=AgentDialog.class.getDeclaredMethod("displayReply",javax.swing.JPanel.class,McpSearch.Reply.class,String.class,String.class,SearchIndex.Focus.class);
+            display.setAccessible(true);
+            var field=AgentDialog.class.getDeclaredField("foundTab");field.setAccessible(true);
+            var tab=(javax.swing.JPanel)field.get(chat);
+            var body=new javax.swing.JPanel();
+            var hit=new Library.Hit(folder.resolve("a.md"),folder.resolve("a.pptx"),"A","slide","a");
+            display.invoke(chat,body,new McpSearch.Reply("A",List.of(),List.of(hit),"A"),"A","",null);
+            var previous=(FoundDocuments)tab.getComponent(0);
+            var t=FoundDocuments.class.getDeclaredField("table");t.setAccessible(true);
+            var action=FoundDocuments.class.getDeclaredField("search");action.setAccessible(true);
+            ((javax.swing.JTable)t.get(previous)).setValueAt(true,0,0);
+            display.invoke(chat,new javax.swing.JPanel(),new McpSearch.Reply("B",List.of()),"B","A",null);
+            var current=tab.getComponent(0);
+            assertNotSame(previous,current);
+            assertEquals(0,((javax.swing.JTable)t.get(current)).getRowCount());
+            assertFalse(((javax.swing.JButton)action.get(current)).isEnabled());
+            ((javax.swing.JButton)body.getComponent(body.getComponentCount()-1)).doClick();
+            assertSame(previous,tab.getComponent(0));
+            assertTrue(((javax.swing.JButton)action.get(previous)).isEnabled());
+            return null;
+        });
+        javax.swing.SwingUtilities.invokeAndWait(check);
+        check.get();
+    }
     @Test void manyMatchingSlidesInOneDeckLeaveRoomForOtherDecks() throws Exception {
         var library=folder.resolve("notes");
         var notes=new ArrayList<Path>();
