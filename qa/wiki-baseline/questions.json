@@ -1,0 +1,156 @@
+[
+  {
+    "id": "a-old",
+    "family": "Atlas",
+    "task": "row",
+    "query": "REQ-010",
+    "docs": [
+      "Atlas-trace-v1.xlsx"
+    ]
+  },
+  {
+    "id": "a-new",
+    "family": "Atlas",
+    "task": "row",
+    "query": "REQ-010",
+    "docs": [
+      "Atlas-trace-v2.xlsx"
+    ]
+  },
+  {
+    "id": "a-empty",
+    "family": "Atlas",
+    "task": "row",
+    "query": "REQ-012",
+    "docs": [
+      "Atlas-trace-v2.xlsx"
+    ]
+  },
+  {
+    "id": "a-both",
+    "family": "Atlas",
+    "task": "agreement",
+    "query": "REQ-010",
+    "docs": [
+      "Atlas-trace-v2.xlsx",
+      "Atlas-design.xlsx"
+    ]
+  },
+  {
+    "id": "a-one",
+    "family": "Atlas",
+    "task": "agreement",
+    "query": "REQ-011",
+    "docs": [
+      "Atlas-trace-v2.xlsx",
+      "Atlas-design.xlsx"
+    ]
+  },
+  {
+    "id": "a-other",
+    "family": "Atlas",
+    "task": "agreement",
+    "query": "REQ-013",
+    "docs": [
+      "Atlas-trace-v2.xlsx",
+      "Atlas-design.xlsx"
+    ]
+  },
+  {
+    "id": "b-id",
+    "family": "Birch",
+    "task": "row",
+    "query": "REQ-010",
+    "docs": [
+      "Birch-design.xlsx"
+    ]
+  },
+  {
+    "id": "b-empty",
+    "family": "Birch",
+    "task": "row",
+    "query": "REQ-014",
+    "docs": [
+      "Birch-design.xlsx"
+    ]
+  },
+  {
+    "id": "atlas-edge",
+    "family": "Atlas",
+    "task": "slide",
+    "query": "Intake Ledger",
+    "docs": []
+  },
+  {
+    "id": "atlas-no-edge",
+    "family": "Atlas",
+    "task": "slide",
+    "query": "Intake Archive",
+    "docs": []
+  },
+  {
+    "id": "atlas-caption",
+    "family": "Atlas",
+    "task": "text",
+    "query": "AmberBeacon",
+    "docs": []
+  },
+  {
+    "id": "atlas-picture",
+    "family": "Atlas",
+    "task": "image",
+    "query": "AmberBeacon",
+    "docs": []
+  },
+  {
+    "id": "atlas-no-picture",
+    "family": "Atlas",
+    "task": "image",
+    "query": "MissingAmberBeacon",
+    "docs": []
+  },
+  {
+    "id": "birch-edge",
+    "family": "Birch",
+    "task": "slide",
+    "query": "Harbor Relay",
+    "docs": []
+  },
+  {
+    "id": "birch-no-edge",
+    "family": "Birch",
+    "task": "slide",
+    "query": "Harbor Shelf",
+    "docs": []
+  },
+  {
+    "id": "birch-caption",
+    "family": "Birch",
+    "task": "text",
+    "query": "VioletMarker",
+    "docs": []
+  },
+  {
+    "id": "birch-picture",
+    "family": "Birch",
+    "task": "image",
+    "query": "VioletMarker",
+    "docs": []
+  },
+  {
+    "id": "birch-no-picture",
+    "family": "Birch",
+    "task": "image",
+    "query": "MissingVioletMarker",
+    "docs": []
+  },
+  {
+    "id": "b-sparse",
+    "family": "Birch",
+    "task": "row",
+    "query": "REQ-020",
+    "docs": [
+      "Birch-wide.xlsx"
+    ]
+  }
+]
