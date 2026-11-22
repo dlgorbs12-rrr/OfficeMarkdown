@@ -42,6 +42,23 @@ class ReferenceEvidenceTest {
         assertFalse(ReferenceIndex.searchDetailed("없는장표", new SearchIndex.Focus(folder.resolve("other.md"), null)).unavailable());
     }
 
+    @Test void sourceLostWhileJudgingCannotProduceNormalAbstention() throws Exception {
+        var source = folder.resolve("changing.pptx");
+        try (var deck = new XMLSlideShow(); var out = Files.newOutputStream(source)) {
+            deck.createSlide().createTextBox().setText("architecture");
+            deck.write(out);
+        }
+        var note = Library.convert(source, folder.resolve("notes"));
+        SearchIndex.indexCompleted(note.getParent(), List.of(note));
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        assertThrows(java.io.IOException.class, () -> ReferenceSearch.evaluate("architecture", null, prompt -> {
+            if (calls.incrementAndGet() == 1) return "[]";
+            Files.delete(source);
+            return "[{\"id\":1,\"grade\":\"no\"}]";
+        }, status -> {}));
+        assertEquals(2, calls.get());
+    }
+
     @Test void routesOrdinaryReferenceQuestionsAndPreservesExactLookups() {
         assertTrue(ReferenceSearch.requested("시스템 구성도 잘된 거 찾아줘"));
         assertTrue(ReferenceSearch.requested("전체 서비스가 어떻게 연결되는지 한 장이 필요해"));
