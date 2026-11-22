@@ -97,10 +97,14 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
     }
     private record Ranked(DocumentAgent.Claim claim,int score,int excerptScore){}
     List<DocumentAgent.Claim> search(Connection db,SearchIndex.Focus focus,String question)throws SQLException{
+        return search(db,focus,question,false);
+    }
+
+    List<DocumentAgent.Claim> search(Connection db,SearchIndex.Focus focus,String question,boolean requireTarget)throws SQLException{
         // In a title such as "AD Adaptor", only the separate AD token identifies the system.
         Map<String,Pattern> idPatterns=new LinkedHashMap<>();
-        for(String id:identifiers)if(id.matches("[A-Za-z0-9]{1,3}"))
-            idPatterns.put(id,Pattern.compile("(?i)(?<![a-z0-9])"+Pattern.quote(id)+"(?![a-z0-9])"));
+        for(String id:identifiers)if(id.matches(requireTarget ? "[A-Za-z0-9]+" : "[A-Za-z0-9]{1,3}"))
+            idPatterns.put(id,Pattern.compile("(?i)(?<![a-z0-9])(?:"+ (id.equalsIgnoreCase("AD") ? "AD|Active[\\s_-]*Directory" : Pattern.quote(id)) +")(?![a-z0-9])"));
         var headingTerms=new LinkedHashSet<>(topics);
         for(String topic:topics)for(String part:topic.split("[\\s_-]+")){
             if(part.length()>1 && !List.of("항목","예시","시트","정보","정의","설계").contains(part))headingTerms.add(part);
@@ -142,6 +146,8 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                         if(identifies(id,name,file,idPatterns))fileIds++;
                         if(identifies(id,line,body,idPatterns))rowIds++;
                     }
+                    if(requireTarget && fileIds==0 && identifiers.stream().noneMatch(id ->
+                            identifies(id,section,heading,idPatterns)))continue;
                     if(kind!=Kind.ADAPTER && kind!=Kind.WBS && identifiers.stream().anyMatch(id ->
                             !identifies(id,name,file,idPatterns) && !identifies(id,section,heading,idPatterns)
                                     && !identifies(id,line,body,idPatterns)))continue;
@@ -204,7 +210,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
             }
         }
         var ordered=best.values().stream().sorted(Comparator.comparingInt(Ranked::score).reversed()).map(Ranked::claim);
-        if(kind!=Kind.WBS && kind!=Kind.ADAPTER){
+        if(requireTarget || (kind!=Kind.WBS && kind!=Kind.ADAPTER)){
             var documents=new HashSet<Path>();
             ordered=ordered.filter(c->documents.add(c.proof().source()));
         }
