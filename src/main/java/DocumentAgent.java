@@ -31,7 +31,10 @@ final class DocumentAgent {
             throw new IOException(label+" CLI를 찾을 수 없습니다. "+exe+".exe를 설치하고 로그인한 뒤 앱을 다시 여세요.");
         }
     }
-    record Claim(String answer,Library.Hit proof,List<SearchIndex.Evidence> evidence,List<String> missing,String referenceUse) {
+    record Claim(String answer,Library.Hit proof,List<SearchIndex.Evidence> evidence,List<String> missing,String referenceUse,ReferenceIndex.Page page) {
+        Claim(String answer,Library.Hit proof,List<SearchIndex.Evidence> evidence,List<String> missing,String referenceUse){
+            this(answer,proof,evidence,missing,referenceUse,null);
+        }
         Claim(String answer,Library.Hit proof,List<SearchIndex.Evidence> evidence,List<String> missing){this(answer,proof,evidence,missing,"");}
         Claim(String answer,Library.Hit proof){this(answer,proof,List.of(),List.of());}
     }
@@ -92,12 +95,11 @@ final class DocumentAgent {
         if(provider==Provider.COPILOT)cmd.addAll(List.of("-p",prompt));
         Path temp=Files.createTempDirectory("office-question-");
         Path out=temp.resolve("reply"), err=temp.resolve("diagnostic");
+        Path input=temp.resolve("request");
         Process proc=null;
         try {
-            proc=new ProcessBuilder(cmd).directory(temp.toFile()).redirectOutput(out.toFile()).redirectError(err.toFile()).start();
-            try(var stream=proc.getOutputStream()){
-                if(provider!=Provider.COPILOT) stream.write(prompt.getBytes(StandardCharsets.UTF_8));
-            }
+            Files.writeString(input,provider==Provider.COPILOT?"":prompt,StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW);
+            proc=new ProcessBuilder(cmd).directory(temp.toFile()).redirectInput(input.toFile()).redirectOutput(out.toFile()).redirectError(err.toFile()).start();
             long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(150);
             while(!proc.waitFor(300,TimeUnit.MILLISECONDS)){
                 progress.poll();
@@ -115,7 +117,7 @@ final class DocumentAgent {
                 proc.descendants().forEach(ProcessHandle::destroyForcibly);
                 proc.destroyForcibly().onExit().join();
             }
-            Files.deleteIfExists(out); Files.deleteIfExists(err);
+            Files.deleteIfExists(input); Files.deleteIfExists(out); Files.deleteIfExists(err);
             // A CLI may leave its own session metadata in this task-specific directory.
             try { Files.delete(temp); } catch(DirectoryNotEmptyException ignored) {}
         }

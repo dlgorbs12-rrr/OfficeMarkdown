@@ -117,10 +117,10 @@ final class AgentDialog extends JPanel {
         buttons.add(scopeDoc);buttons.add(scopeSection);buttons.add(position);buttons.add(original);detail.add(buttons,BorderLayout.SOUTH);
         original.setEnabled(false);position.setEnabled(false);
 
-        original.addActionListener(e->{var c=selected;if(c!=null)openOriginal.accept(c.proof());});
+        original.addActionListener(e->{var c=selected;if(c!=null)actOnCurrent(c,openOriginal);});
         position.addActionListener(e->{
             var c=selected;
-            if(c!=null) preview.accept(c.proof());
+            if(c!=null)actOnCurrent(c,preview);
         });
         detail.setBorder(BorderFactory.createTitledBorder("선택한 출처 미리보기"));
         results.setLeftComponent(threadScroll);hidePreview();
@@ -321,6 +321,18 @@ final class AgentDialog extends JPanel {
 
     private record Detail(String html, BufferedImage picture) {}
 
+    private void actOnCurrent(DocumentAgent.Claim claim,Consumer<Library.Hit> action){
+        if(claim.page()==null){action.accept(claim.proof());return;}
+        new SwingWorker<Boolean,Void>(){
+            protected Boolean doInBackground() throws Exception{return ReferenceIndex.current(claim.page());}
+            protected void done(){
+                if(selected!=claim)return;
+                try{if(get()){action.accept(claim.proof());return;}}catch(Exception ignored){}
+                JOptionPane.showMessageDialog(AgentDialog.this,"현재 버전의 원본을 확인할 수 없습니다. 다시 검색하세요.");
+            }
+        }.execute();
+    }
+
     private void showSelected(DocumentAgent.Claim claim) {
         selected=claim;
         if(previewTask!=null) previewTask.cancel(true);
@@ -335,6 +347,9 @@ final class AgentDialog extends JPanel {
         answer.setText(evidence+"</body></html>");answer.setCaretPosition(0);
         var loader=new SwingWorker<Detail,Void>() {
             protected Detail doInBackground() throws Exception {
+                if(claim.page()!=null){
+                    return new Detail("<p>"+Entities.escape(claim.referenceUse())+"</p>",ReferenceWiki.preview(claim.page()));
+                }
                 if(hit.picture()!=null){
                     var bitmap=PictureAssets.preview(hit.md(),hit.picture(),false);
                     return new Detail(bitmap==null ? "<p>그림 파일을 읽을 수 없습니다.</p>" : "",bitmap);
