@@ -1,0 +1,47 @@
+{
+  "a-old": [
+    "SC-010"
+  ],
+  "a-new": [
+    "SC-012"
+  ],
+  "a-empty": [],
+  "a-both": [
+    "both/SC-012"
+  ],
+  "a-one": [
+    "left/SC-011"
+  ],
+  "a-other": [
+    "right/SC-013"
+  ],
+  "b-id": [
+    "SC-090"
+  ],
+  "b-empty": [],
+  "atlas-edge": [
+    "Atlas-route.pptx@슬라이드 2"
+  ],
+  "atlas-no-edge": [],
+  "atlas-caption": [
+    "Atlas-route.pptx@슬라이드 2"
+  ],
+  "atlas-picture": [
+    "Atlas-route.pptx@슬라이드 2"
+  ],
+  "atlas-no-picture": [],
+  "birch-edge": [
+    "Birch-route.pptx@슬라이드 2"
+  ],
+  "birch-no-edge": [],
+  "birch-caption": [
+    "Birch-route.pptx@슬라이드 2"
+  ],
+  "birch-picture": [
+    "Birch-route.pptx@슬라이드 2"
+  ],
+  "birch-no-picture": [],
+  "b-sparse": [
+    "SC-120"
+  ]
+}
