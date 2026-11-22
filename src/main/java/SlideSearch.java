@@ -18,11 +18,35 @@ final class SlideSearch {
             "(?<=..)(?:되는지|하는지|기까지|하는|받기까지|부터|까지|으로|에서|에게|들이|로|를|을|이|가|은|는|과|와)$");
     private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+");
     private static final Pattern PAGE = Pattern.compile("슬라이드 [0-9]+");
+    private static final Set<String> REFERENCE_FILLER = Set.of(
+            "거", "것", "장", "장이", "잘된", "사용할", "관한", "설명", "해주세요", "필요합니다", "제외", "빼고");
 
     static boolean requested(String query) {
         return WORD.matcher(query).results().anyMatch(m -> REQUEST.contains(m.group())
                 && (m.group().startsWith("찾아") || m.group().startsWith("보여") || m.group().equals("장표")
                     || m.group().equals("슬라이드")));
+    }
+
+    static List<String> referenceTerms(String query) {
+        var terms = new LinkedHashSet<String>();
+        var words = WORD.matcher(query.replace("다른 사람 대신", "대리"));
+        while (words.find() && terms.size() < 24) {
+            String word = words.group();
+            String stem = SUFFIX.matcher(word).replaceFirst("");
+            if (REQUEST.contains(word) || REQUEST.contains(stem) || REFERENCE_FILLER.contains(word)
+                    || REFERENCE_FILLER.contains(stem) || MODIFIERS.contains(stem)) continue;
+            terms.add(stem);
+            terms.addAll(switch (stem) {
+                case "일정", "일정표", "스케줄", "스케줄표" -> List.of("일정", "스케줄");
+                case "흐름", "과정", "절차", "프로세스" -> List.of("흐름", "과정", "절차", "프로세스");
+                case "신입사원", "입사자" -> List.of("신입", "입사");
+                case "화면", "페이지" -> List.of("화면", "페이지");
+                case "구성도", "구조도" -> List.of("구성도", "구조도");
+                case "연결", "연동" -> List.of("연결", "연동");
+                default -> List.of();
+            });
+        }
+        return terms.stream().limit(24).toList();
     }
 
     static String match(String query) {
