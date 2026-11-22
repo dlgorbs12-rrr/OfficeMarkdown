@@ -258,6 +258,8 @@ final class ReferenceWiki {
             graphics.scale(scale, scale);
             var slide=show.getSlides().get(number-1);
             slide.getShapes().forEach(ReferenceWiki::resolveHangulFonts);
+            slide.getSlideLayout().getShapes().forEach(ReferenceWiki::resolveHangulFonts);
+            slide.getSlideMaster().getShapes().forEach(ReferenceWiki::resolveHangulFonts);
             slide.getShapes().forEach(ReferenceWiki::dropUnfilledShadows);
             slide.draw(graphics);
             return image;

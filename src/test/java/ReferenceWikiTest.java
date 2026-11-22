@@ -1,4 +1,6 @@
+import org.apache.poi.common.usermodel.fonts.FontGroup;
 import org.apache.poi.sl.usermodel.ShapeType;
+import org.apache.poi.xslf.usermodel.XSLFSheet;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,6 +39,56 @@ class ReferenceWikiTest {
             assertNull(english.getFontFamily(east));
         }
     }
+    @Test void rendersHangulOnSharedMasterAndLayout() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(new java.awt.Font("Malgun Gothic", 0, 24).canDisplay('한'));
+        Path source = directory.resolve("shared-layout.pptx");
+        try (var show = new XMLSlideShow(); var out = Files.newOutputStream(source)) {
+            show.setPageSize(new Dimension(1440, 900));
+            var first = show.createSlide();
+            var layout = first.getSlideLayout();
+            var second = show.createSlide(layout);
+            for (var slide : List.of(first, second)) {
+                slide.createTextBox().setText("Slide " + slide.getSlideNumber());
+            }
+            addFooter(first.getSlideMaster(), 320, false);
+            addFooter(layout, 440, false);
+            addFooter(layout, 560, true);
+            show.write(out);
+        }
+        byte[] original = Files.readAllBytes(source);
+        index(source);
+        ReferenceIndex.prepare();
+        var pages = ReferenceIndex.pages(source);
+        assertEquals(2, pages.size());
+        assertFooterPixels(ReferenceWiki.preview(pages.getFirst()));
+        // Captioning renders both slides from a single in-memory slideshow.
+        var seen = new ArrayList<Integer>();
+        ReferenceWiki.prepare(ignored -> {}, "fixture-model", image -> {
+            assertFooterPixels(image);
+            seen.add(image.getWidth());
+            return "공유 바닥글";
+        });
+        assertEquals(2, seen.size());
+        assertArrayEquals(original, Files.readAllBytes(source));
+    }
+
+    private static void addFooter(XSLFSheet sheet, int y, boolean explicitFont) {
+        var box = sheet.createTextBox();
+        box.setAnchor(new Rectangle2D.Double(100, y, 180, 50));
+        var run = box.setText("한글");
+        run.setFontSize(24.);
+        run.setFontColor(Color.BLACK);
+        run.setFontFamily("Arial", FontGroup.LATIN);
+        if (explicitFont) run.setFontFamily("Malgun Gothic", FontGroup.EAST_ASIAN);
+    }
+
+    private static void assertFooterPixels(BufferedImage image) {
+        int[] expected = image.getRGB(100, 560, 180, 50, null, 0, 180);
+        assertTrue(java.util.Arrays.stream(expected).anyMatch(pixel -> pixel == Color.BLACK.getRGB()));
+        assertArrayEquals(expected, image.getRGB(100, 320, 180, 50, null, 0, 180), "master");
+        assertArrayEquals(expected, image.getRGB(100, 440, 180, 50, null, 0, 180), "layout");
+    }
+
     @Test void previewDoesNotPaintShadowsOfUnfilledShapesOverContent() throws Exception {
         Path source = directory.resolve("그림자 검증.pptx");
         try (var show = new XMLSlideShow(); var output = Files.newOutputStream(source)) {
