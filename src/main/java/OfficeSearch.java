@@ -11,12 +11,17 @@ public final class OfficeSearch {
     public static void main(String[] args) {
         try {
             args = windowsLauncherArguments(args);
+            if (args.length == 1 && args[0].equals("--prepare-slide-search")) {
+                SlideSearch.prepare(SearchIndex.database());
+                return;
+            }
             if (args.length > 0 && args[0].equals("--excel-cells")) {
                 excelCells(args);
                 return;
             }
             Path library = SearchIndex.defaultLibrary();
             boolean refreshOutput = false;
+            boolean experimentalSlides = false;
             var scope = SearchIndex.Scope.ALL;
             var mode = SearchIndex.Mode.PHRASE;
             int limit = 50;
@@ -29,10 +34,16 @@ public final class OfficeSearch {
                     }
                     case "--scope" -> scope = SearchIndex.Scope.valueOf(args[++i].toUpperCase(Locale.ROOT));
                     case "--mode" -> mode = SearchIndex.Mode.valueOf(args[++i].toUpperCase(Locale.ROOT));
+                    case "--experimental-slides" -> {
+                        experimentalSlides = true;
+                        mode = SearchIndex.Mode.RELEVANCE;
+                    }
                     case "--limit" -> limit = Integer.parseInt(args[++i]);
                     case "--help" -> {
                         System.out.println("OfficeSearch.exe [--scope all|title|content|image] [--mode phrase|and|or|relevance] [--limit 1..500] [--library DIR] [QUERY]");
                         System.out.println("OfficeSearch.exe --excel-cells SCREEN|INTERFACE REQ-ID MARKDOWN SHEET [SECOND_MARKDOWN SECOND_SHEET]");
+                        System.out.println("OfficeSearch.exe --prepare-slide-search  (experimental slide index for an existing library)");
+                        System.out.println("OfficeSearch.exe --experimental-slides QUERY");
                         return;
                     }
                     default -> terms.add(args[i]);
@@ -44,6 +55,11 @@ public final class OfficeSearch {
             SearchIndex.importPreviousIndex(SearchIndex.defaultLibrary());
             if (!java.nio.file.Files.exists(SearchIndex.database()))
                 SearchIndex.synchronize(library, ignored -> {});
+            if (experimentalSlides) {
+                if (!SearchIndex.readIndex(db -> List.of(SlideSearch.installed(db))).contains(true))
+                    throw new IllegalArgumentException("먼저 --prepare-slide-search로 장표 색인을 준비하세요.");
+                System.setProperty(SlideSearch.ENABLED,"true");
+            }
             for (var hit : SearchIndex.searchCached(library,String.join(" ",terms),scope,mode,limit)) {
                 var result = new LinkedHashMap<>(Map.of("title",hit.title(),"section",hit.section(),"excerpt",hit.excerpt(),
                         "markdownPath",hit.md().toString(),"sourcePath",hit.source().toString()));

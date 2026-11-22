@@ -69,18 +69,22 @@ final class SearchIndex {
 
     static List<Library.Hit> searchCached(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
+        boolean slideRequest = mode == Mode.RELEVANCE && scope == Scope.ALL
+                && Boolean.getBoolean(SlideSearch.ENABLED) && SlideSearch.requested(query);
         return readIndex(db -> {
             if(mode==Mode.RELEVANCE && !query.isBlank()){
                 if (scope==Scope.IMAGE) return RelevanceSearch.pictures(db,query,limit,null);
                 // The per-source lookup uses several statements on this dedicated read connection.
                 db.setAutoCommit(false);
+                if (slideRequest && SlideSearch.installed(db))
+                    return SlideSearch.search(db, query, limit);
                 return RelevanceSearch.text(db,query,scope,limit);
             }
             var words = query.isBlank()?List.of(""):mode.words(query);
             if (scope == Scope.IMAGE) return findPictures(db, words, mode, limit);
             if (words.size() <= 1) return find(db, words.isEmpty() ? "" : words.getFirst(), scope, limit);
             return findWords(db, words, scope, mode, limit);
-        });
+        }, !slideRequest);
     }
 
     static List<Library.Hit> libraryCards(Path root, int limit) throws IOException {
@@ -131,6 +135,10 @@ final class SearchIndex {
     }
 
     static <T> List<T> readIndex(Query<T> query) throws IOException {
+        return readIndex(query, true);
+    }
+
+    private static <T> List<T> readIndex(Query<T> query, boolean includePictures) throws IOException {
         Path database = database();
         if (!Files.isRegularFile(database)) return List.of();
         var config = new SQLiteConfig();
@@ -155,6 +163,7 @@ final class SearchIndex {
             String join=hasRoles?" LEFT JOIN document_roles r ON r.md=d.md":"";
             String predicate = hasQueue ? " WHERE NOT EXISTS (SELECT 1 FROM large_pending p WHERE p.md=d.md)" : "";
             sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.*,"+role+" AS role FROM main.docs d"+join + predicate);
+            if (!includePictures) return query.run(db);
             boolean hasPictureText;
             try(var t=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='picture_search_ocr'")){
                 hasPictureText=t.next();
@@ -435,6 +444,8 @@ final class SearchIndex {
             sql.executeUpdate("INSERT INTO main.docs(md,stamp,source,title) SELECT d.md,stamp,source,title FROM legacy.docs d JOIN incoming i ON i.id=d.id");
             String join = " JOIN incoming i ON i.id=v.doc JOIN main.docs d ON d.md=i.md ORDER BY v.id";
             sql.executeUpdate("INSERT INTO main.lines(doc,kind,section,text,folded) SELECT d.id,v.kind,v.section,v.text,v.folded FROM legacy.lines v" + join);
+            if (SlideSearch.installed(db))
+                SlideSearch.indexSelected(db, "SELECT d.id FROM main.docs d JOIN incoming i ON i.md=d.md WHERE lower(d.source) LIKE '%.pptx'");
             if (tables.contains("pictures"))
                 sql.executeUpdate("INSERT INTO main.pictures(doc,path,location,section,text,folded) SELECT d.id,v.path,v.location,v.section,v.text,v.folded FROM legacy.pictures v" + join);
             for (String table : List.of("large_allowed","large_pending")) {
@@ -661,6 +672,8 @@ final class SearchIndex {
                 add(line, id, 2, section, value);
             }
             inferRole(file,id,title);
+            if (source.toString().toLowerCase(Locale.ROOT).endsWith(".pptx") && SlideSearch.installed(db))
+                SlideSearch.indexDocument(db,id);
         }
 
         private void inferRole(Path note,long id,String title)throws SQLException{
