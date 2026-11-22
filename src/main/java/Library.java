@@ -31,19 +31,33 @@ final class Library {
         if (!supported(file)) throw new IOException("지원하지 않는 파일 형식");
         Files.createDirectories(library);
         library = library.toRealPath();
-        String uri = file.toUri().toASCIIString();
         String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest(file.toString().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8)));
         String name = file.getFileName().toString();
         Path target = library.resolve(name.substring(0, Math.min(80, name.length())) + "-" + hash.substring(0, 20) + ".md");
+        for (int attempt=0; ; attempt++) {
+            try (var snapshot = EvidenceIndex.supported(file) ? EvidenceIndex.Snapshot.capture(file,library) : null) {
+                return convertVersion(file,target,ocr,snapshot);
+            } catch (EvidenceIndex.Changed changed) {
+                if (attempt != 0) throw changed;
+            }
+        }
+    }
+
+    private static Path convertVersion(Path file, Path target, ImageOcr ocr, EvidenceIndex.Snapshot snapshot) throws Exception {
+        Path library = target.getParent();
+        String name = file.getFileName().toString();
+        String uri = file.toUri().toASCIIString();
+        Path input = snapshot == null ? file : snapshot.file();
         Path temp = Files.createTempFile(library, ".convert-", ".tmp");
         try (var pictures = new PictureAssets(target, ocr)) {
             try (BufferedWriter out = Files.newBufferedWriter(temp)) {
                 out.write("# " + name + "\n\n[원본 파일 열기](<" + uri + ">)\n\n원본 경로　" + file + "\n");
                 pictures.writeHeader(out);
+                if (snapshot != null) out.write(EvidenceIndex.hashHeader(snapshot.hash()) + "\n");
                 String ext = name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
                 if (ext.equals("xlsx")) {
-                    XlsxStreaming.write(file, library, out, pictures);
+                    XlsxStreaming.write(input, library, out, pictures);
                 } else if (ext.equals("xls")) {
                     try (Workbook book = WorkbookFactory.create(file.toFile(), null, true)) {
                         spreadsheet(book, out, pictures);
@@ -55,7 +69,7 @@ final class Library {
                 } else if (ext.equals("doc")) {
                     WordConversion.writeDoc(file, out, pictures);
                 } else {
-                    try (InputStream in = Files.newInputStream(file);
+                    try (InputStream in = Files.newInputStream(input);
                          SlideShow<?, ?> show = ext.equals("ppt") ? new HSLFSlideShow(in) : new XMLSlideShow(in)) {
                         int number = 0;
                         for (Slide<?, ?> slide : show.getSlides()) {
@@ -76,6 +90,7 @@ final class Library {
                     }
                 }
             }
+            if (snapshot != null) snapshot.check(file);
             pictures.publish(temp);
             return target;
         } finally { Files.deleteIfExists(temp); }
