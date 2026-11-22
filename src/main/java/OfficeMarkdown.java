@@ -50,7 +50,8 @@ public final class OfficeMarkdown {
     private static final int AUTOMATIC_WORKERS = 0;
     private final JComboBox<Integer> conversionWorkers = new JComboBox<>(new Integer[]{1, 2, AUTOMATIC_WORKERS});
     private final JButton original = new JButton("원본 열기"), locate = new JButton("파일 위치"), note = new JButton("Markdown 뷰어");
-    private final JButton pictureLocation = new JButton("MD 위치 보기");
+    private final JButton pictureLocation = new JButton("Markdown에서 보기");
+    private final JButton copyPath = new JButton(LibraryStyle.copyIcon());
     private final DefaultListModel<Library.Hit> model = new DefaultListModel<>();
     private final JList<Library.Hit> results = new JList<>(model);
     private final JList<Library.Hit> gallery = new JList<>(model);
@@ -73,10 +74,10 @@ public final class OfficeMarkdown {
     private final JButton syncIndex = new JButton("색인 새로 고침");
     private static final int LIMIT = 500;
 
-    private final JLabel count = LibraryStyle.label("문서 목록", 16, true, LibraryStyle.INK);
-    private final JLabel detailTitle = LibraryStyle.label("", 18, true, LibraryStyle.INK);
-    private final JLabel sectionLabel = LibraryStyle.label("", 13, true, LibraryStyle.ACCENT);
-    private final JTextArea pathText = area();
+    private final JLabel count = LibraryStyle.label("문서 목록", 15, true, LibraryStyle.INK);
+    private final JLabel detailTitle = LibraryStyle.label("", 17, true, LibraryStyle.INK);
+    private final JLabel sectionLabel = LibraryStyle.label("", 12, true, LibraryStyle.ACCENT);
+    private final JLabel pathText = LibraryStyle.label("", 12, false, LibraryStyle.MUTED);
     private final CardLayout pages = new CardLayout();
     private final JPanel contents = new JPanel(pages);
     private final JLabel emptyTitle = LibraryStyle.label("", 22, true, LibraryStyle.INK);
@@ -96,6 +97,8 @@ public final class OfficeMarkdown {
     private final JEditorPane viewer=new JEditorPane("text/html","");
     private final JComboBox<MarkdownReader.Page> chapters=new JComboBox<>();
     private final JTabbedPane tabs=new JTabbedPane();
+    private final JPanel chapterNavigation = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,4,4),0);
+    private ImageIcon pictureImage;
     private boolean loadingChapters;
     private boolean showImport;
     private enum ResultView { DOCUMENT, PICTURE, BROKEN_OCR }
@@ -118,7 +121,19 @@ public final class OfficeMarkdown {
             UIManager.put("defaultFont", LibraryStyle.TYPE);
             UIManager.put("Component.focusColor", LibraryStyle.ACCENT);
             UIManager.put("TextComponent.arc", 12);
-            UIManager.put("Component.arc", 10);
+            UIManager.put("Component.arc", 8);
+            UIManager.put("Button.arc", 8);
+            // Menus use the app accent instead of FlatLaf's default blue selection.
+            var menuHover = new Color(0xF3E2DA);
+            for (String key : List.of("MenuItem", "Menu", "CheckBoxMenuItem", "RadioButtonMenuItem")) {
+                UIManager.put(key + ".selectionBackground", LibraryStyle.ACCENT);
+                UIManager.put(key + ".selectionForeground", Color.WHITE);
+            }
+            UIManager.put("MenuBar.hoverBackground", menuHover);
+            UIManager.put("MenuBar.selectionBackground", menuHover);
+            UIManager.put("MenuBar.selectionForeground", LibraryStyle.INK);
+            UIManager.put("ScrollBar.thumbArc", 999);
+            UIManager.put("ScrollBar.width", 10);
             new OfficeMarkdown(library).show();
         });
     }
@@ -140,21 +155,23 @@ public final class OfficeMarkdown {
                     updateStatus.setText(message);
                     updateStatus.setVisible(message != null && !message.isBlank());
                 });
-        JMenu updateMenu = new JMenu("업데이트");
+        JMenu updateMenu = new JMenu("도움말");
         JMenuItem checkUpdate = new JMenuItem("업데이트 확인");
         checkUpdate.addActionListener(e -> updates.checkManually());
         updateMenu.add(checkUpdate);
         updateMenu.add(updates.autoCheckItem());
         JMenuBar menus = new JMenuBar();
-        menus.add(updateMenu);
         frame.setJMenuBar(menus);
         JPanel body = new JPanel(new BorderLayout());
         body.setBackground(LibraryStyle.CANVAS);
-        JPanel head = LibraryStyle.panel(new BorderLayout(16,0), 16);
+        JPanel head = LibraryStyle.panel(new BorderLayout(16,0), 0);
         head.setOpaque(true); head.setBackground(Color.WHITE);
+        head.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0,0,1,0,LibraryStyle.SOFT_LINE), new EmptyBorder(8,16,8,16)));
         JButton brand = new JButton("OfficeMarkdown");
-        brand.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD,19f));
-        if (iconUrl != null) brand.setIcon(new ImageIcon(frame.getIconImage().getScaledInstance(32,32,Image.SCALE_SMOOTH)));
+        brand.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD,17f));
+        brand.setMargin(new Insets(0,0,0,0));
+        if (iconUrl != null) brand.setIcon(new ImageIcon(frame.getIconImage().getScaledInstance(28,28,Image.SCALE_SMOOTH)));
         brand.setBorderPainted(false);
         brand.setContentAreaFilled(false);
         brand.setToolTipText("보관함 처음으로");
@@ -202,21 +219,33 @@ public final class OfficeMarkdown {
             },hit -> open(hit,false,false,agentDialog));
         var toolsMenu = new JMenu("보관함");
         menus.add(toolsMenu);
-        var indexMenu = new JMenu("색인 관리");
-        toolsMenu.add(indexMenu);
-        var prepareSlides = indexMenu.add("장표 설명 준비…");
-        var preparationDialog = new JDialog(frame,"색인 관리 · 장표 설명 준비",false);
-        preparationDialog.add(referencePanel.controls());
-        preparationDialog.setMinimumSize(new Dimension(540,110));
+        menus.add(updateMenu);
+        var openFolder = toolsMenu.add("Markdown 폴더 열기");
+        toolsMenu.add("Markdown 파일 보기…").addActionListener(e->chooseMarkdown(null));
+        toolsMenu.addSeparator();
+        var manageMenu = new JMenu("보관함 관리");
+        toolsMenu.add(manageMenu);
+        var prepareSlides = new JMenuItem("장표 설명 준비…");
+        var preparationDialog = new JDialog(frame,"장표 설명 준비",false);
+        var preparationBody = LibraryStyle.panel(new BorderLayout(0,12),18);
+        preparationBody.setOpaque(true);
+        preparationBody.setBackground(Color.WHITE);
+        var preparationHint = new JLabel("<html><div style='width:460px'>보관함 PPTX의 장표 이미지를 연결된 에이전트에 보내 장표 설명을 만듭니다."
+                + " 이미지 검색과 대화에서 참고 장표를 더 잘 찾게 됩니다. 시작하면 대상 문서·장표 수를 보여 주고 진행 여부를 묻습니다."
+                + " 진행하면 AI 사용량이 발생합니다.</div></html>");
+        preparationHint.setFont(LibraryStyle.TYPE.deriveFont(13f));
+        preparationHint.setForeground(LibraryStyle.SECONDARY);
+        preparationBody.add(preparationHint,BorderLayout.NORTH);
+        preparationBody.add(referencePanel.controls());
+        preparationDialog.setContentPane(preparationBody);
+        preparationDialog.getRootPane().registerKeyboardAction(e -> preparationDialog.setVisible(false),
+                KeyStroke.getKeyStroke("ESCAPE"), JComponent.WHEN_IN_FOCUSED_WINDOW);
+        preparationDialog.setMinimumSize(new Dimension(560,170));
         prepareSlides.addActionListener(e -> {
             preparationDialog.pack();
             preparationDialog.setLocationRelativeTo(frame);
             preparationDialog.setVisible(true);
         });
-        var openFolder = toolsMenu.add("Markdown 폴더");
-        toolsMenu.add("Markdown 파일 보기").addActionListener(e->chooseMarkdown(null));
-        toolsMenu.add("저품질 OCR 후보 찾기").addActionListener(e->findBrokenOcr.doClick());
-        toolsMenu.add("여러 문서 한글 정밀 OCR").addActionListener(e->{if(!working) choosePrecisionNotes();});
         var register = new JButton("MCP 설정");
         register.addActionListener(e -> McpRegistration.open(frame, register));
         var addMenu = new JPopupMenu();
@@ -227,10 +256,10 @@ public final class OfficeMarkdown {
         for (JButton b : List.of(register,addDocuments)) {
             LibraryStyle.button(b,b==addDocuments); imports.add(b);
         }
-        addDocuments.setBackground(SearchStudio.CHARCOAL);
         head.add(imports,BorderLayout.EAST); body.add(head,BorderLayout.NORTH);
 
-        JPanel workspace = LibraryStyle.panel(new BorderLayout(0,14),22);
+        JPanel workspace = LibraryStyle.panel(new BorderLayout(0,10),0);
+        workspace.setBorder(new EmptyBorder(12,16,10,16));
         JPanel searchBox = LibraryStyle.panel(new BorderLayout(0,8),4);
         headline.setLabelFor(query);
         var track = new SearchStudio.Round(new FlowLayout(FlowLayout.CENTER, 2, 0), 36, SearchStudio.TRACK, null, 0);
@@ -240,10 +269,10 @@ public final class OfficeMarkdown {
             button.putClientProperty("JButton.buttonType","roundRect");
             button.putClientProperty("FlatLaf.style","arc: 999; borderWidth: 0; focusWidth: 0; innerFocusWidth: 0;"
                     + " background: #ebe8dc; hoverBackground: #e2ddcc; pressedBackground: #dcd6c2;"
-                    + (button==agentMode?" selectedBackground: #b65612; selectedForeground: #ffffff;":" selectedBackground: #ffffff; selectedForeground: #25251f;")
+                    + " selectedBackground: #242923; selectedForeground: #ffffff;"
                     + " borderColor: #ebe8dc;"
                     + " focusedBorderColor: #ebe8dc");
-            button.setMargin(new Insets(6,14,6,14));
+            button.setMargin(new Insets(5,14,5,14));
             button.setFont(LibraryStyle.TYPE.deriveFont(13f));
             button.addItemListener(e -> button.setFont(LibraryStyle.TYPE.deriveFont(
                     button.isSelected() ? Font.BOLD : Font.PLAIN, 13f)));
@@ -256,6 +285,7 @@ public final class OfficeMarkdown {
         head.add(modes,BorderLayout.CENTER);
         agentMode.addActionListener(e -> {
             views.show(searchViews,"agent");
+            status.setText("Enter 보내기 · Shift+Enter 줄바꿈");
             updateReferenceContext();
             agentDialog.focusQuestion();
         });
@@ -331,22 +361,29 @@ public final class OfficeMarkdown {
         var referenceArea = LibraryStyle.panel(new BorderLayout(0,4),0);
         chatWithResults.setToolTipText("검색어와 결과 문서를 에이전트 대화로 가져옵니다. 보낼 때까지 검색을 실행하지 않습니다.");
         chatWithResults.addActionListener(e -> discussResults());
-        chatAction.add(chatWithResults,BorderLayout.WEST);
+        LibraryStyle.button(chatWithResults,false);
+        chatAction.add(chatWithResults,BorderLayout.EAST);
         chatAction.setVisible(false);
-        referenceArea.add(chatAction,BorderLayout.NORTH);
 
         localSearch.add(referenceArea, BorderLayout.SOUTH);
         searchViews.add(localSearch, "local");
         searchViews.add(agentDialog, "agent");
-        for (JButton b : List.of(search,findBrokenOcr,repairOcr,ocrOnly,largeOptions,original,locate,note,pictureLocation,emptyButton))
+        for (JButton b : List.of(search,findBrokenOcr,repairOcr,ocrOnly,largeOptions,original,locate,note,pictureLocation,roleButton,emptyButton,
+                backToGallery,repairAll,stopRepair,resumeRepair))
             LibraryStyle.button(b,b==search || b==original || b==emptyButton);
         search.putClientProperty("JButton.buttonType", null);
-        search.putClientProperty("FlatLaf.style", "arc: 10; borderWidth: 0; focusWidth: 0; background: #c34422; hoverBackground: #a6371b");
+        search.putClientProperty("FlatLaf.style", "arc: 8; borderWidth: 0; focusWidth: 0; background: #b74323; hoverBackground: #9e391d; foreground: #ffffff");
         search.setToolTipText("검색 (Enter)");
 
-        JPanel left = LibraryStyle.card(new BorderLayout(0,10));
+        JPanel left = LibraryStyle.card(new BorderLayout(0,6));
+        left.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(LibraryStyle.LINE),
+                new EmptyBorder(10,0,0,0)));
         JPanel resultHeader = LibraryStyle.panel(new BorderLayout(0,6),0);
-        resultHeader.add(count,BorderLayout.NORTH);
+        resultHeader.setBorder(new EmptyBorder(0,14,4,10));
+        JPanel resultTitle = LibraryStyle.panel(new BorderLayout(8,0),0);
+        resultTitle.add(count);
+        resultTitle.add(chatAction,BorderLayout.EAST);
+        resultHeader.add(resultTitle,BorderLayout.NORTH);
 
         repairOcr.setVisible(false);
         repairOcr.setToolTipText("목록에서 선택한 그림을 로컬 PaddleOCR로 다시 읽습니다. Ctrl 또는 Shift로 여러 그림을 선택할 수 있습니다.");
@@ -369,21 +406,57 @@ public final class OfficeMarkdown {
             showGallery();
             gallery.requestFocusInWindow();
         });
-        left.setBackground(SearchStudio.CHARCOAL);
-        count.setForeground(Color.WHITE);
-        results.setBackground(SearchStudio.CHARCOAL);
+        results.setBackground(Color.WHITE);
         left.add(resultHeader,BorderLayout.NORTH);
         results.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        results.setCellRenderer(LibraryStyle.renderer(thumbnails::get)); results.setFixedCellHeight(70);
-        results.setFixedCellWidth(240);
+        results.setCellRenderer(LibraryStyle.renderer(thumbnails::get)); results.setFixedCellHeight(90);
+        results.setFixedCellWidth(120); // Rows follow the viewport width instead of clipping long titles.
         results.getAccessibleContext().setAccessibleName("검색 결과");
-        JScrollPane items = new JScrollPane(results); items.setBorder(null);
+        JScrollPane items = new JScrollPane(results);
+        items.setBorder(BorderFactory.createMatteBorder(1,0,0,0,LibraryStyle.SOFT_LINE));
+        items.getViewport().addComponentListener(new java.awt.event.ComponentAdapter(){
+            @Override public void componentResized(java.awt.event.ComponentEvent event){ results.repaint(); }
+        });
         items.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         left.add(items);
 
-        JPanel right = LibraryStyle.card(new BorderLayout(0,12));
-        JPanel names = LibraryStyle.panel(new GridLayout(0,1,0,4),0);
-        names.add(sectionLabel); names.add(detailTitle); right.add(names,BorderLayout.NORTH);
+        JPanel right = LibraryStyle.card(new BorderLayout(0,8));
+        right.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(LibraryStyle.LINE),
+                new EmptyBorder(14,16,12,16)));
+        JPanel detailHead = LibraryStyle.panel(new GridBagLayout(),0);
+        JPanel pathRow = LibraryStyle.panel(null,0);
+        pathRow.setLayout(new BoxLayout(pathRow,BoxLayout.X_AXIS));
+        LibraryStyle.link(copyPath);
+        copyPath.setToolTipText("원본 경로 복사");
+        copyPath.getAccessibleContext().setAccessibleName("원본 경로 복사");
+        copyPath.setMargin(new Insets(2,4,2,4));
+        copyPath.addActionListener(e -> {
+            var hit = selectedHit();
+            if (hit == null) return;
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+                    new java.awt.datatransfer.StringSelection(hit.source().toString()), null);
+            status.setText("원본 경로를 복사했습니다.");
+        });
+        pathRow.add(pathText); pathRow.add(copyPath); pathRow.add(Box.createHorizontalGlue());
+        JPanel actions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
+        roleButton.setToolTipText("문서 역할 바꾸기");
+        for (JButton b : List.of(roleButton,locate,note,pictureLocation,original)) actions.add(b);
+        pictureLocation.setVisible(false);
+        // Actions share the short section line, so the title and the path each keep the full width.
+        sectionLabel.setMinimumSize(new Dimension(20,sectionLabel.getFontMetrics(sectionLabel.getFont()).getHeight()));
+        detailTitle.setMinimumSize(new Dimension(40,detailTitle.getFontMetrics(detailTitle.getFont()).getHeight()));
+        pathText.setMinimumSize(new Dimension(40,pathText.getFontMetrics(pathText.getFont()).getHeight()));
+        var at = new GridBagConstraints();
+        at.gridx = 0; at.gridy = 0; at.weightx = 1; at.fill = GridBagConstraints.HORIZONTAL; at.anchor = GridBagConstraints.WEST;
+        detailHead.add(sectionLabel, at);
+        at.gridx = 1; at.weightx = 0; at.fill = GridBagConstraints.NONE; at.anchor = GridBagConstraints.EAST;
+        detailHead.add(actions, at);
+        at.gridx = 0; at.gridwidth = 2; at.weightx = 1; at.fill = GridBagConstraints.HORIZONTAL; at.anchor = GridBagConstraints.WEST;
+        at.gridy = 1; at.insets = new Insets(6,0,0,0);
+        detailHead.add(detailTitle, at);
+        at.gridy = 2; at.insets = new Insets(2,0,0,0);
+        detailHead.add(pathRow, at);
+        right.add(detailHead,BorderLayout.NORTH);
         preview.setEditable(false); preview.setLineWrap(true); preview.setWrapStyleWord(true);
         preview.setFont(LibraryStyle.TYPE); preview.setMargin(new Insets(12,12,12,12));
         preview.setBackground(new Color(0xFBF9F3)); preview.setForeground(LibraryStyle.INK);
@@ -393,35 +466,51 @@ public final class OfficeMarkdown {
         viewer.getAccessibleContext().setAccessibleName("Markdown 문서 본문");
         chapters.getAccessibleContext().setAccessibleName("슬라이드·시트 이동");
         chapters.setMaximumRowCount(16);
-        chapters.setPrototypeDisplayValue(new MarkdownReader.Page("슬라이드 또는 시트",1,""));
-        chapters.addActionListener(e -> { if(!loadingChapters) renderChapter(); });
-        JPanel document=LibraryStyle.panel(new BorderLayout(0,6),0);
+        chapters.setPrototypeDisplayValue(new MarkdownReader.Page("슬라이드 000",1,""));
+        chapters.addActionListener(e -> {
+            var page = chapters.getSelectedItem();
+            chapters.setToolTipText(page == null ? null : page.toString());
+            if(!loadingChapters) renderChapter();
+        });
+        JPanel document=LibraryStyle.panel(new BorderLayout(0,0),0);
         var viewerScroll = new JScrollPane(viewer);
-        viewerScroll.setBorder(BorderFactory.createMatteBorder(1,0,0,0,LibraryStyle.LINE));
-        document.add(chapters,BorderLayout.NORTH); document.add(viewerScroll);
+        viewerScroll.setBorder(null);
+        viewer.setBorder(new EmptyBorder(8,4,8,4));
+        document.add(viewerScroll);
+        var previousChapter = new JButton("‹"); var nextChapter = new JButton("›");
+        previousChapter.setToolTipText("이전 슬라이드·시트"); nextChapter.setToolTipText("다음 슬라이드·시트");
+        previousChapter.addActionListener(e -> { if (chapters.getSelectedIndex() > 0) chapters.setSelectedIndex(chapters.getSelectedIndex()-1); });
+        nextChapter.addActionListener(e -> { if (chapters.getSelectedIndex() < chapters.getItemCount()-1) chapters.setSelectedIndex(chapters.getSelectedIndex()+1); });
+        for (JButton b : List.of(previousChapter,nextChapter)) {
+            LibraryStyle.button(b,false);
+            b.setMargin(new Insets(3,9,3,9));
+        }
+        chapterNavigation.add(previousChapter); chapterNavigation.add(chapters); chapterNavigation.add(nextChapter);
         tabs.addTab("문서 보기",document); tabs.addTab("검색 근거",reading);
         picturePreview.setHorizontalAlignment(SwingConstants.CENTER);
         picturePreview.setVerticalAlignment(SwingConstants.CENTER);
         picturePreview.getAccessibleContext().setAccessibleName("검색된 그림 미리보기");
-        tabs.addTab("그림 미리보기",new JScrollPane(picturePreview));
+        picturePreview.setOpaque(true);
+        picturePreview.setBackground(LibraryStyle.STAGE);
+        var pictureScroll = new JScrollPane(picturePreview);
+        pictureScroll.setBorder(null);
+        pictureScroll.getViewport().addComponentListener(new java.awt.event.ComponentAdapter(){
+            @Override public void componentResized(java.awt.event.ComponentEvent event){ fitPicture(); }
+        });
+        tabs.addTab("그림",pictureScroll);
         tabs.setEnabledAt(2,false);
         tabs.setOpaque(false);
-        tabs.putClientProperty("FlatLaf.style","tabType: card; tabHeight: 34; tabArc: 8; cardTabArc: 8;"
-                + " background: #ffffff; selectedBackground: #292b24; selectedForeground: #ffffff;"
-                + " hoverColor: #eee9da; contentAreaColor: #d9d6c8; cardTabSelectionHeight: 0; showTabSeparators: false");
+        tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+        tabs.putClientProperty("FlatLaf.style",LibraryStyle.TABS);
+        tabs.putClientProperty("JTabbedPane.trailingComponent",chapterNavigation);
+        // FlatLaf wraps the trailing component in an opaque panel that paints the default gray.
+        if (chapterNavigation.getParent() instanceof JComponent wrapper) wrapper.setOpaque(false);
+        tabs.addChangeListener(e -> chapterNavigation.setVisible(tabs.getSelectedIndex()==0));
         right.add(tabs);
-        JPanel lower = LibraryStyle.panel(new BorderLayout(0,6),0);
-        lower.add(LibraryStyle.label("원본 위치",12,true,LibraryStyle.MUTED),BorderLayout.NORTH);
-        pathText.setRows(1); pathText.setFont(LibraryStyle.TYPE.deriveFont(12f));
-        JScrollPane location = new JScrollPane(pathText); location.setBorder(null); lower.add(location);
-        JPanel actions = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,4,0),0);
-        for (JButton b : List.of(original,pictureLocation,note,roleButton,locate)) actions.add(b);
-        pictureLocation.setVisible(false);
-        lower.add(actions,BorderLayout.SOUTH); right.add(lower,BorderLayout.SOUTH);
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,left,right);
-        split.setBorder(null); split.setOpaque(false); split.setDividerSize(8); split.setResizeWeight(.32);
+        split.setBorder(null); split.setOpaque(false); split.setDividerSize(10); split.setResizeWeight(.32);
         split.putClientProperty("FlatLaf.style","gripDotCount: 0");
-        left.setMinimumSize(new Dimension(215,160)); right.setMinimumSize(new Dimension(325,160));
+        left.setMinimumSize(new Dimension(240,160)); right.setMinimumSize(new Dimension(420,160));
         gallery.setLayoutOrientation(JList.HORIZONTAL_WRAP);
         gallery.setVisibleRowCount(-1);
         gallery.setFixedCellWidth(245);
@@ -458,36 +547,48 @@ public final class OfficeMarkdown {
             prompt.add(c,pos);
         blank.add(prompt); contents.add(blank,"empty");
         workspace.add(searchViews); body.add(workspace);
-        JPanel footer = LibraryStyle.panel(new BorderLayout(0,4),0);
-        footer.setBorder(new EmptyBorder(0,24,12,24)); status.setForeground(LibraryStyle.MUTED);
+        JPanel footer = LibraryStyle.panel(new BorderLayout(14,0),0);
+        footer.setOpaque(true); footer.setBackground(Color.WHITE);
+        footer.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1,0,0,0,LibraryStyle.SOFT_LINE), new EmptyBorder(3,16,3,8)));
+        for (JLabel label : List.of(status, indexStatus, updateStatus)) {
+            label.setForeground(LibraryStyle.MUTED);
+            label.setFont(LibraryStyle.TYPE.deriveFont(12f));
+        }
+        indexStatus.setForeground(LibraryStyle.SECONDARY);
         JPanel statusLine = LibraryStyle.panel(new BorderLayout(10,0),0);
-        progress.setPreferredSize(new Dimension(170,18)); progress.setVisible(false);
-        statusLine.add(status); statusLine.add(progress,BorderLayout.EAST); footer.add(statusLine,BorderLayout.NORTH);
-        JPanel indexLine = LibraryStyle.panel(new BorderLayout(10,0),0);
-        indexStatus.setForeground(LibraryStyle.MUTED);
+        progress.setPreferredSize(new Dimension(150,10)); progress.setVisible(false);
+        JPanel statusTail = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,8,0),0);
+        statusTail.add(updateStatus); statusTail.add(progress);
+        statusLine.add(status); statusLine.add(statusTail,BorderLayout.EAST);
+        footer.add(indexStatus,BorderLayout.WEST);
+        footer.add(statusLine);
         syncIndex.setToolTipText("Markdown 폴더의 변경 내용을 색인에 반영합니다.");
         LibraryStyle.button(syncIndex, false);
         syncIndex.addActionListener(e -> {
             invalidateResultScope();
             startIndexSync();
         });
-        JPanel indexActions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT, 6, 0), 0);
+        JPanel indexActions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT, 2, 0), 0);
         var maintenance = new JPopupMenu();
-        for (var action : List.of(enrichPictures,ocrOnly,findBrokenOcr,largeOptions,syncIndex)) {
-            var item = maintenance.add(action.getText());
-            action.addPropertyChangeListener("enabled",e -> item.setEnabled(action.isEnabled()));
-            item.setEnabled(action.isEnabled());
-            item.addActionListener(e -> action.doClick());
+        // The footer popup and the 보관함 관리 menu offer the same grouped actions.
+        for (var menu : List.<JComponent>of(maintenance, manageMenu.getPopupMenu())) {
+            menu.add(groupLabel("색인"));
+            for (var action : List.of(syncIndex,enrichPictures,largeOptions)) menu.add(actionItem(action));
+            menu.add(actionItem(prepareSlides));
+            menu.add(new JPopupMenu.Separator());
+            menu.add(groupLabel("글자 인식(OCR)"));
+            for (var action : List.of(ocrOnly,findBrokenOcr)) menu.add(actionItem(action));
+            var precision = new JMenuItem("여러 문서 한글 정밀 OCR…");
+            precision.addActionListener(e->{if(!working) choosePrecisionNotes();});
+            menu.add(precision);
         }
-        maintenance.add("장표 설명 준비…").addActionListener(e -> prepareSlides.doClick());
-        var manage = new JButton("보관함 관리");
-        manage.addActionListener(e -> maintenance.show(manage,0,-maintenance.getPreferredSize().height));
-        for (JButton b : List.of(agentSettings, manage)) {
-            b.putClientProperty("JButton.buttonType","borderless");
-            b.setForeground(LibraryStyle.MUTED);
-            b.setFont(LibraryStyle.TYPE.deriveFont(12f));
-            b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        }
+        var manage = new JButton("보관함 관리 ▲");
+        manage.addActionListener(e -> {
+            var size = maintenance.getPreferredSize();
+            maintenance.show(manage, manage.getWidth()-size.width, -size.height);
+        });
+        for (JButton b : List.of(agentSettings, manage, conversionResult)) LibraryStyle.link(b);
         conversionResult.setVisible(false);
         conversionResult.addActionListener(e->{
             if(lastConversion==null)chooseMarkdown(null);
@@ -495,15 +596,12 @@ public final class OfficeMarkdown {
         });
         indexActions.add(conversionResult);
         indexActions.add(agentSettings);
-        indexActions.add(LibraryStyle.label("·",12,false,LibraryStyle.MUTED));
         indexActions.add(manage);
 
         largeOptions.addActionListener(e -> manageLarge());
         ocrOnly.addActionListener(e -> chooseOcrNotes());
-        indexLine.add(indexStatus); indexLine.add(indexActions,BorderLayout.EAST); footer.add(indexLine,BorderLayout.SOUTH);
-        updateStatus.setForeground(LibraryStyle.MUTED);
+        footer.add(indexActions,BorderLayout.EAST);
         updateStatus.setVisible(false);
-        footer.add(updateStatus, BorderLayout.CENTER);
         body.add(footer,BorderLayout.SOUTH);
 
         results.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) selection(); });
@@ -605,7 +703,7 @@ public final class OfficeMarkdown {
             }
         });
         for (JComponent target : List.of(contents,results,gallery,preview,blank)) target.setTransferHandler(body.getTransferHandler());
-        frame.setContentPane(body); frame.setSize(1160,780); frame.setMinimumSize(new Dimension(720,490));
+        frame.setContentPane(body); frame.setSize(1160,780); frame.setMinimumSize(new Dimension(900,600));
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE); frame.setLocationRelativeTo(null);
         frame.addWindowListener(new java.awt.event.WindowAdapter() {
             @Override public void windowClosing(java.awt.event.WindowEvent e) { referencePanel.reset(); }
@@ -633,7 +731,7 @@ public final class OfficeMarkdown {
         if (rendering!=null) rendering.cancel(true);
         loadingChapters=true; chapters.removeAllItems(); loadingChapters=false;
         if (loadingPicture!=null) loadingPicture.cancel(true);
-        picturePreview.setIcon(null); picturePreview.setText("");
+        pictureImage = null; picturePreview.setIcon(null); picturePreview.setText("");
         viewer.setText("");
         Library.Hit hit = selectedHit();
         boolean picture = hit != null && hit.picture() != null;
@@ -642,19 +740,20 @@ public final class OfficeMarkdown {
         tabs.setSelectedIndex(picture ? 2 : 0);
         pictureLocation.setVisible(picture);
         for (JButton b : List.of(original, locate, note)) b.setEnabled(hit != null);
+        copyPath.setEnabled(hit != null);
         if (hit==null) {preview.setText(""); pathText.setText(""); detailTitle.setText(""); sectionLabel.setText(""); return;}
         detailTitle.setText(hit.title()); detailTitle.setToolTipText(hit.title());
-        String location=picture ? "그림 " + hit.picture().number() + " · " + hit.picture().location() : hit.section();
+        String location=picture ? hit.picture().location() : hit.section();
         if(picture && resultView==ResultView.BROKEN_OCR)location+=" · "+OcrRepair.qualityReason(hit.excerpt(),hit.picture().location());
-        sectionLabel.setText(location);
-        pathText.setText(hit.source().toString()); pathText.setCaretPosition(0);
+        sectionLabel.setText(location); sectionLabel.setToolTipText(location);
+        pathText.setText(breadcrumb(hit.source())); pathText.setToolTipText(hit.source().toString());
         String excerpt=hit.displayExcerpt();
         if(!hit.otherSources().isEmpty())
             excerpt+="\n\n다른 사본·버전\n"+String.join("\n",hit.otherSources().stream().map(Path::toString).toList());
         preview.setText(excerpt); highlight(); preview.setCaretPosition(0);
         viewer.setText("문서를 불러오는 중…");
         if (picture) loadPicture(hit);
-        roleButton.setText("문서 역할");
+        roleButton.setText("역할 ▼");
         reader=new SwingWorker<>() {
             private String role;
             protected List<MarkdownReader.Page> doInBackground() throws Exception {
@@ -665,7 +764,7 @@ public final class OfficeMarkdown {
                 if(isCancelled() || selectedHit()!=hit) return;
                 try {
                     var sections=get();
-                    roleButton.setText("역할 · "+role);
+                    roleButton.setText("역할: "+role+" ▼");
                     loadingChapters=true;
                     chapters.setModel(new DefaultComboBoxModel<>(sections.toArray(MarkdownReader.Page[]::new)));
                     int index=MarkdownReader.locate(sections,hit);
@@ -692,7 +791,7 @@ public final class OfficeMarkdown {
                     viewer.setText(get()); viewer.setCaretPosition(0);
                     var doc=viewer.getDocument();
                     String visible=doc.getText(0,doc.getLength());
-                    var paint=new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(new Color(0xF7D898));
+                    var paint=new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(new Color(0xFBE3A0));
                     var highlighter=viewer.getHighlighter(); highlighter.removeAllHighlights();
                     int first=-1;
                     for(String word:activeWords) {
@@ -725,6 +824,43 @@ public final class OfficeMarkdown {
         }
     }
 
+    /** Scales the selected picture down to the visible area; small pictures keep their own size. */
+    private void fitPicture() {
+        if (pictureImage == null) { picturePreview.setIcon(null); return; }
+        var viewport = (JViewport) picturePreview.getParent();
+        int width = Math.max(1, viewport.getWidth() - 24), height = Math.max(1, viewport.getHeight() - 24);
+        int iw = pictureImage.getIconWidth(), ih = pictureImage.getIconHeight();
+        double scale = Math.min(1, Math.min((double) width / iw, (double) height / ih));
+        if (scale >= 1) { picturePreview.setIcon(pictureImage); return; }
+        picturePreview.setIcon(new ImageIcon(pictureImage.getImage().getScaledInstance(
+                Math.max(1, (int) (iw * scale)), Math.max(1, (int) (ih * scale)), Image.SCALE_SMOOTH)));
+    }
+
+    /** Shows the last folders of the original path, which is the part that tells similar files apart. */
+    static String breadcrumb(Path source) {
+        var parent = source.getParent();
+        if (parent == null) return source.toString();
+        var parts = new ArrayList<String>();
+        for (var part : parent) parts.add(part.toString());
+        int from = Math.max(0, parts.size() - 5);
+        return (from > 0 ? "… › " : "") + String.join(" › ", parts.subList(from, parts.size()));
+    }
+
+    private static JMenuItem groupLabel(String text) {
+        var label = new JMenuItem(text);
+        label.setEnabled(false);
+        label.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD, 11f));
+        return label;
+    }
+
+    private static JMenuItem actionItem(AbstractButton action) {
+        var item = new JMenuItem(action.getText());
+        action.addPropertyChangeListener("enabled",e -> item.setEnabled(action.isEnabled()));
+        item.setEnabled(action.isEnabled());
+        item.addActionListener(e -> action.doClick());
+        return item;
+    }
+
     private void loadPicture(Library.Hit hit) {
         picturePreview.setText("그림을 불러오는 중…");
         loadingPicture = new SwingWorker<>() {
@@ -738,7 +874,8 @@ public final class OfficeMarkdown {
                 try { icon = get(); }
                 catch (java.util.concurrent.ExecutionException ignored) {}
                 catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-                picturePreview.setIcon(icon);
+                pictureImage = icon instanceof ImageIcon image ? image : null;
+                fitPicture();
                 picturePreview.setText(icon == null ? "그림 미리보기를 표시할 수 없습니다." : "");
             }
         };
@@ -779,7 +916,7 @@ public final class OfficeMarkdown {
     private void highlight() {
         var marker = preview.getHighlighter();
         marker.removeAllHighlights();
-        var paint = new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(new Color(0xF7D898));
+        var paint = new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(new Color(0xFBE3A0));
         try {
             for (String word : activeWords) {
                 if (word.isEmpty()) continue;
@@ -832,7 +969,7 @@ public final class OfficeMarkdown {
                 return SearchIndex.documentRole(hit.md());
             }
             protected void done(){
-                try{String role=get();if(hit.equals(selectedHit()))roleButton.setText("역할 · "+role);}
+                try{String role=get();if(hit.equals(selectedHit()))roleButton.setText("역할: "+role+" ▼");}
                 catch(Exception ex){error(ex);}
             }
         }.execute();
@@ -895,7 +1032,6 @@ public final class OfficeMarkdown {
         repairAll.setVisible(view==ResultView.BROKEN_OCR);
         results.setSelectionMode(pictures ? ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
                 : ListSelectionModel.SINGLE_SELECTION);
-        tabs.setTitleAt(1, pictures ? "인식 문구" : "검색 근거");
     }
 
     private boolean galleryRequest() {
@@ -916,8 +1052,10 @@ public final class OfficeMarkdown {
     }
 
     private void showGallery() {
-        SearchStudio.sectionTitle(galleryTitle, resultView == ResultView.PICTURE ? "보관함의 그림" : "보관함의 문서",
-                model.size(), model.size() == LIMIT);
+        String needle = displayedSearch == null ? "" : displayedSearch.needle().strip();
+        String title = !needle.isEmpty() ? "‘" + needle + "’ " + (resultView == ResultView.PICTURE ? "그림 결과" : "검색 결과")
+                : resultView == ResultView.PICTURE ? "보관함의 그림" : "보관함의 문서";
+        SearchStudio.sectionTitle(galleryTitle, title, model.size(), model.size() == LIMIT);
         hero.setVisible(displayedSearch != null && displayedSearch.needle().isBlank());
         recentQueries.setVisible(hero.isVisible() && !recentTerms.isEmpty());
         pages.show(contents,"gallery");
@@ -1074,8 +1212,9 @@ public final class OfficeMarkdown {
                 : "검색어를 줄이거나 전체 문서 목록을 확인하세요.");
         emptyButton.setText(showImport ? "파일 선택" : "전체 문서 보기");
         showHits(hits, previous);
-        status.setText(summary + (hits.isEmpty() || galleryRequest() && !readingCard ? "Ctrl+F 검색창으로 이동"
-                : "Ctrl+F 검색창으로 이동     ·     결과를 두 번 클릭하면 Markdown 뷰어 열기"));
+        status.setText(agentMode.isSelected() ? "Enter 보내기 · Shift+Enter 줄바꿈"
+                : summary + (hits.isEmpty() || galleryRequest() && !readingCard ? "Ctrl+F 검색창으로 이동"
+                : "Ctrl+F 검색창으로 이동 · 결과를 두 번 누르면 Markdown 뷰어로 엽니다"));
     }
 
     private void startIndexSync() {
