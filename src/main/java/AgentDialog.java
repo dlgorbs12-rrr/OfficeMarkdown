@@ -41,8 +41,12 @@ final class AgentDialog extends JPanel {
     private final JButton previous=new JButton("이전 출처"),next=new JButton("다음 출처");
     private final JComboBox<Integer> zoom=new JComboBox<>(new Integer[]{50,75,100,125,150,200});
     private final JPanel foundTab=new JPanel(new BorderLayout());
-    private SwingWorker<McpSearch.Reply,String> slideTask;
+    private SwingWorker<McpSearch.SlideResults,String> slideTask;
     private FoundDocuments searchingPanel;
+    private record PreviewChoice(DocumentAgent.Claim claim){
+        public String toString(){return claim.proof().title()+" · "+claim.proof().section();}
+    }
+    private final JComboBox<PreviewChoice> previewChoices=new JComboBox<>();
     private JDialog previewWindow;
     private BufferedImage previewBitmap;
     private String previewHtml="";
@@ -130,7 +134,12 @@ final class AgentDialog extends JPanel {
         browse.add(previous);browse.add(next);browse.add(new JLabel("확대/축소 (%)"));browse.add(zoom);
         zoom.setSelectedItem(100);zoom.addActionListener(e->renderPreview());
         previous.addActionListener(e->stepPreview(-1));next.addActionListener(e->stepPreview(1));
-        navigation.add(browse,BorderLayout.WEST);
+        previewChoices.getAccessibleContext().setAccessibleName("문서와 장표 선택");
+        previewChoices.addActionListener(e->{
+            var choice=(PreviewChoice)previewChoices.getSelectedItem();
+            if(choice!=null && choice.claim()!=selected)showSelected(choice.claim());
+        });
+        navigation.add(browse,BorderLayout.WEST);navigation.add(previewChoices,BorderLayout.CENTER);
         detailHeader.add(navigation,BorderLayout.NORTH);
         var toolbar=LibraryStyle.panel(new BorderLayout(3,0),0);
         toolbar.add(LibraryStyle.label("미리보기",13,true,LibraryStyle.INK),BorderLayout.WEST);
@@ -329,7 +338,7 @@ final class AgentDialog extends JPanel {
         DocumentAgent.Ask contextual=context.isBlank()?reader:instruction->reader.run("이전 대화 (현재 질문의 생략된 조건 확인용):\n"+context+"\n현재 작업:\n"+instruction);
         searchingPanel=panel;panel.busy(true);panel.setStatus("선택한 문서에서 장표 확인 중…");
         slideTask=new SwingWorker<>(){
-            protected McpSearch.Reply doInBackground() throws Exception{
+            protected McpSearch.SlideResults doInBackground() throws Exception{
                 return McpSearch.selectedSlides(prompt,expanded,focus,notes,contextual,this::publish);
             }
             protected void process(List<String> updates){if(slideTask==this)panel.setStatus(updates.getLast());}
@@ -337,11 +346,11 @@ final class AgentDialog extends JPanel {
                 if(slideTask!=this)return;
                 try{
                     var reply=get();var slides=reply.sources();
-                    if(slides.isEmpty()){panel.setStatus(reply.text());return;}
+                    panel.showDeckResults(reply.decks(),thisClaim->showSelected(thisClaim));
                     for(var claim:slides)answerGroups.put(claim,slides);
                     documents.append(slides);
-                    panel.setStatus("참고 슬라이드 "+slides.size()+"장을 찾았습니다.");
-                    showSelected(slides.getFirst());
+                    panel.setStatus("선택한 PPTX "+reply.decks().size()+"개 · 추천 슬라이드 "+slides.size()+"장");
+                    if(!slides.isEmpty())showSelected(slides.getFirst());
                 }catch(Exception ex){panel.setStatus("슬라이드 검색 실패 · "+(ex.getCause()==null?ex:ex.getCause()).getMessage());}
                 finally{panel.busy(false);searchingPanel=null;slideTask=null;}
             }
@@ -508,6 +517,10 @@ final class AgentDialog extends JPanel {
         if(!previewWindow.isVisible())previewWindow.setVisible(true);
         previewWindow.toFront();
         var group=answerGroups.getOrDefault(claim,List.of(claim));
+        var choices=new DefaultComboBoxModel<PreviewChoice>();
+        for(var item:group)choices.addElement(new PreviewChoice(item));
+        choices.setSelectedItem(new PreviewChoice(claim));previewChoices.setModel(choices);
+        previewChoices.setVisible(group.size()>1);
         int at=group.indexOf(claim);previous.setEnabled(at>0);next.setEnabled(at>=0 && at+1<group.size());
         previewBitmap=null;previewHtml="";
         String heading="<html><head><style>body{font-family:'Malgun Gothic';font-size:11pt;color:#25251f;margin:10px}"

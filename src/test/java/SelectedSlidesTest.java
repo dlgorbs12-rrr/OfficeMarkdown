@@ -82,6 +82,29 @@ class SelectedSlidesTest {
         var reply=McpSearch.slideDocuments("architecture",null,null,prompt->"[]",status->{});
         assertEquals(2,reply.candidates().size());
     }
+    @Test void selectedDecksEachReceiveAReviewAndOneFailureDoesNotHideAnother() throws Exception {
+        var library=folder.resolve("notes");
+        var selected=new ArrayList<String>();
+        for(String name:List.of("crowded","diagram")){
+            Path source=folder.resolve(name+".pptx");
+            try(var deck=new XMLSlideShow();var out=Files.newOutputStream(source)){
+                for(int i=0;i<(name.equals("crowded")?8:1);i++)
+                    deck.createSlide().createTextBox().setText(name.equals("crowded")?"architecture":"diagram source");
+                deck.write(out);
+            }
+            var md=Library.convert(source,library);selected.add(md.toString());
+        }
+        SearchIndex.indexCompleted(library,selected.stream().map(Path::of).toList());
+        ReferenceIndex.prepare();
+        var result=McpSearch.selectedSlides("architecture","architecture",null,selected,prompt->{
+            if(prompt.contains("architecture") && !prompt.contains("diagram source"))throw new java.io.IOException("fixture unavailable");
+            return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"diagram\",\"quote\":\"diagram source\"}]";
+        },status->{});
+        assertEquals(selected,result.decks().stream().map(McpSearch.DeckResult::note).toList());
+        assertTrue(result.decks().getFirst().outcome().contains("확인 실패"));
+        assertTrue(result.decks().getLast().outcome().contains("앞쪽 장표 1장 검토"));
+        assertEquals(List.of(Path.of(selected.getLast())),result.sources().stream().map(c->c.proof().md()).toList());
+    }
     @Test void candidateDiscoveryThenOnlyCheckedDecksAreInspected() throws Exception {
         var notes=new ArrayList<Path>();
         var library=folder.resolve("notes");
@@ -103,9 +126,9 @@ class SelectedSlidesTest {
         var selected=notes.subList(0,2).stream().map(Path::toString).toList();
         DocumentAgent.Ask judge=prompt->{
             assertTrue(prompt.contains("질문: "+request));
-            assertTrue(prompt.contains("architecture alpha") && prompt.contains("architecture beta"));
+            assertNotEquals(prompt.contains("architecture alpha"),prompt.contains("architecture beta"));
             assertFalse(prompt.contains("architecture excluded"));
-            return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"},{\"id\":2,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"}]";
+            return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"}]";
         };
         var slides=McpSearch.selectedSlides(request,found.expanded(),null,selected,judge,status->{});
         assertEquals(2,slides.sources().size());

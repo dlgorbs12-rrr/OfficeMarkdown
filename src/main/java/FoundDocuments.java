@@ -15,6 +15,7 @@ final class FoundDocuments extends JPanel {
     void onScope(Consumer<List<String>> action){useScope=action;}
     private final JButton search=new JButton();
     private final JLabel status=new JLabel();
+    private final JPanel outcomes=new JPanel();
     private boolean busy;
     private Consumer<List<String>> submit=notes->{};
     void onSearch(Consumer<List<String>> action){submit=action;}
@@ -32,7 +33,7 @@ final class FoundDocuments extends JPanel {
             box.setToolTipText(hit.source().toString());
             box.addItemListener(e->{
                 if(box.isSelected())checked.add(hit.md());else checked.remove(hit.md());
-                updateAction();
+                clearDeckResults();updateAction();
             });
             choices.put(hit.md(),box);
             box.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -40,7 +41,8 @@ final class FoundDocuments extends JPanel {
             rows.add(box);
         }
         var content=new JPanel(new BorderLayout());
-        content.add(rows,BorderLayout.NORTH);
+        outcomes.setLayout(new BoxLayout(outcomes,BoxLayout.Y_AXIS));
+        content.add(rows,BorderLayout.NORTH);content.add(outcomes,BorderLayout.CENTER);
         var footer=new JPanel(new BorderLayout(0,5));
         footer.add(status,BorderLayout.NORTH);var actions=new JPanel(new java.awt.GridLayout(0,1,0,3));
         actions.add(ask);actions.add(search);footer.add(actions,BorderLayout.SOUTH);
@@ -50,9 +52,24 @@ final class FoundDocuments extends JPanel {
         search.addActionListener(e->submit.accept(checked.stream().filter(presentations::contains).map(Path::toString).toList()));
         updateAction();
     }
+    private void clearDeckResults(){outcomes.removeAll();outcomes.revalidate();outcomes.repaint();}
+    void showDeckResults(List<McpSearch.DeckResult> decks,Consumer<DocumentAgent.Claim> open){
+        clearDeckResults();
+        for(var deck:decks){
+            var label=new JLabel();label.putClientProperty("html.disable",true);
+            label.setText(choices.get(Path.of(deck.note())).getText()+" · "+deck.outcome());
+            label.setToolTipText(label.getText());outcomes.add(label);
+            for(var slide:deck.slides()){
+                var button=new JButton(slide.proof().section()+" 열기");
+                button.addActionListener(event->open.accept(slide));outcomes.add(button);
+            }
+        }
+        outcomes.revalidate();outcomes.repaint();
+    }
     void setStatus(String text){status.setText(text);status.setToolTipText(text);}
     void busy(boolean value){
         busy=value;
+        if(value)clearDeckResults();
         choices.values().forEach(box->box.setEnabled(!value));
         updateAction();
     }

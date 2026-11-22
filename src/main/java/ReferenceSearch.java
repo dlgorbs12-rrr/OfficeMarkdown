@@ -16,7 +16,7 @@ final class ReferenceSearch {
             + "(?:찾아\\s*(?:줘|주세요|봐)|추천(?:해\\s*(?:줘|주세요))?|보여\\s*(?:줘|주세요)|필요(?:해요?|합니다)|있(?:을까|나요|어))"
             + "[.!?？~]*\\s*$",Pattern.CASE_INSENSITIVE);
     private static final Pattern EXACT = Pattern.compile("(?i)(?:\\b[A-Z]{2,8}-[0-9]+\\b|\\b[A-Z]{1,3}[1-9][0-9]*\\b|엑셀|스프레드시트|\\.xlsx?\\b)");
-    private static final int LIMIT = 4;
+    static final int LIMIT = 4;
     record Recommendation(ReferenceIndex.Page page, String reason, String quote) {}
     record Trace(List<ReferenceIndex.Page> candidates,List<ReferenceIndex.Page> inspected,List<Recommendation> recommended) {}
     static boolean requested(String question) {
