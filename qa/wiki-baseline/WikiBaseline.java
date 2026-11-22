@@ -58,9 +58,11 @@ class WikiBaseline {
         Files.createDirectory(output);
         System.setProperty("officemd.dataDir",output.toString());
         Path library = SearchIndex.defaultLibrary();
+        var notes = new HashMap<String,Path>();
+        boolean nativeCells = args.length == 4 && args[3].equals("--excel-cells");
         long start = System.nanoTime();
         try (var files = Files.list(source)) {
-            for (var file : files.sorted().toList()) Library.convert(file,library);
+            for (var file : files.sorted().toList()) notes.put(file.getFileName().toString(),Library.convert(file,library));
         }
         long converted = System.nanoTime();
         SearchIndex.synchronizeAll(library, ignored -> {});
@@ -76,7 +78,16 @@ class WikiBaseline {
         var times = new ArrayList<Double>();
         for (var q : questions) {
             long before = System.nanoTime();
-            predictions.put(q.id,run(q,library,mcp));
+            if (nativeCells && q.task.equals("row")) {
+                var result=ExcelRelations.lookup(notes.get(q.docs.getFirst()),"Mapping",ExcelRelations.Kind.SCREEN,q.query);
+                if (!result.complete()) throw new IllegalStateException(result.status());
+                predictions.put(q.id,result.targets().keySet());
+            } else if (nativeCells && q.task.equals("agreement")) {
+                Path left=notes.get(q.docs.getFirst()), right=notes.get(q.docs.getLast());
+                var result=ExcelRelations.compare(Set.of(left,right),left,"Mapping",right,"Mapping",ExcelRelations.Kind.SCREEN,q.query);
+                if (!result.status().equals("COMPLETE")) throw new IllegalStateException(result.status());
+                predictions.put(q.id,result.matches().entrySet().stream().map(e->e.getValue()+"/"+e.getKey()).toList());
+            } else predictions.put(q.id,run(q,library,mcp));
             times.add((System.nanoTime()-before)/1e6);
         }
         Files.writeString(output.resolve("predictions.json"),JSON.toJson(predictions));

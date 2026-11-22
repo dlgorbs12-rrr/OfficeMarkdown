@@ -11,6 +11,10 @@ public final class OfficeSearch {
     public static void main(String[] args) {
         try {
             args = windowsLauncherArguments(args);
+            if (args.length > 0 && args[0].equals("--excel-cells")) {
+                excelCells(args);
+                return;
+            }
             Path library = SearchIndex.defaultLibrary();
             boolean refreshOutput = false;
             var scope = SearchIndex.Scope.ALL;
@@ -28,6 +32,7 @@ public final class OfficeSearch {
                     case "--limit" -> limit = Integer.parseInt(args[++i]);
                     case "--help" -> {
                         System.out.println("OfficeSearch.exe [--scope all|title|content|image] [--mode phrase|and|or|relevance] [--limit 1..500] [--library DIR] [QUERY]");
+                        System.out.println("OfficeSearch.exe --excel-cells SCREEN|INTERFACE REQ-ID MARKDOWN SHEET [SECOND_MARKDOWN SECOND_SHEET]");
                         return;
                     }
                     default -> terms.add(args[i]);
@@ -56,6 +61,22 @@ public final class OfficeSearch {
             System.err.println(e);
             System.exit(1);
         }
+    }
+
+    private static void excelCells(String[] args) throws Exception {
+        if (args.length != 5 && args.length != 7)
+            throw new IllegalArgumentException("--excel-cells SCREEN|INTERFACE REQ-ID MARKDOWN SHEET [SECOND_MARKDOWN SECOND_SHEET]");
+        var kind = ExcelRelations.Kind.valueOf(args[1].toUpperCase(Locale.ROOT));
+        Path left = Path.of(args[3]).toAbsolutePath().normalize();
+        Object result;
+        if (args.length == 5) result = ExcelRelations.lookup(left,args[4],kind,args[2]);
+        else {
+            Path right = Path.of(args[5]).toAbsolutePath().normalize();
+            result = ExcelRelations.compare(new HashSet<>(List.of(left,right)),left,args[4],right,args[6],kind,args[2]);
+        }
+        com.google.gson.JsonSerializer<Path> path = (value,type,context) -> new com.google.gson.JsonPrimitive(value.toString());
+        var json = new com.google.gson.GsonBuilder().registerTypeHierarchyAdapter(Path.class,path).create();
+        System.out.write((json.toJson(result)+"\n").getBytes(StandardCharsets.UTF_8));
     }
 
     // The Windows Java launcher can replace characters outside the ANSI code page before main().
