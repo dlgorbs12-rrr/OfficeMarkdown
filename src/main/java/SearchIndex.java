@@ -780,7 +780,7 @@ final class SearchIndex {
         return stamp(attrs) + "\n" + Objects.toString(generation, "") + "\n" + manifest;
     }
 
-    private static Path original(String link) {
+    static Path original(String link) {
         String prefix = "[원본 파일 열기](<";
         if (link == null || !link.startsWith(prefix) || !link.endsWith(">)")) return null;
         try {

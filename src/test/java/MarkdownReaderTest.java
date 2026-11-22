@@ -5,6 +5,19 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class MarkdownReaderTest {
     @TempDir Path root;
+    @Test void onlyConvertedSpreadsheetGridsCanHideEmptyColumns() throws Exception {
+        var grid="| 행 | A | B | C |\n| --- | --- | --- | --- |\n| 1 | value | | tail |";
+        var sheet=new MarkdownReader.Page("시트 · 시험",1,grid);
+        var converted=root.resolve("sample.xlsx-01234567890123456789.md");
+        assertTrue(MarkdownReader.html(sheet,null,converted).contains("빈 열 1개 숨김"));
+        var longNote=root.resolve("a".repeat(80)+"-01234567890123456789.md");
+        Files.writeString(longNote,"# sheet\n\n[원본 파일 열기](<"+root.resolve("a".repeat(80)+".xlsx").toUri()+">)\n");
+        assertTrue(MarkdownReader.html(sheet,null,longNote).contains("빈 열 1개 숨김"));
+        assertFalse(MarkdownReader.html(sheet,null,root.resolve("manual.md")).contains("숨김"));
+        var slide=new MarkdownReader.Page("슬라이드 1",1,grid.replace("B |","보류 |"));
+        assertTrue(MarkdownReader.html(slide,null,root.resolve("sample.pptx-01234567890123456789.md")).contains("보류"));
+    }
+
     @Test void combinedRankedExcerptLeadsToTheMatchingChunk() throws Exception {
         var file=root.resolve("nearby.md");
         Files.writeString(file,"# Nearby\n\n[원본 파일 열기](<"+root.resolve("nearby.docx").toUri()+">)\n\n## Topic\nbravo\n"+"earlier\n".repeat(10)+"prefixalpha … detail\nprefixbravo\n"+"filler\n".repeat(110)+"\nalpha … detail\nbravo\n");

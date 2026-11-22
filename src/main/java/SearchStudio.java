@@ -47,14 +47,13 @@ final class SearchStudio {
         var label = new JLabel();
         label.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD, 20f));
         label.setForeground(LibraryStyle.INK);
-        label.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1,0,0,0,LibraryStyle.INK), new EmptyBorder(12,2,6,0)));
+        label.setBorder(new EmptyBorder(4,2,6,0));
         return label;
     }
 
     static void sectionTitle(JLabel label, String name, int count, boolean more) {
-        String number = String.format(Locale.ROOT, "%02d", count) + (more ? "+" : "");
-        label.setText("<html>" + name + "&nbsp;&nbsp;<span style='color:#c34422;font-family:Consolas;font-weight:normal'>"
+        String number = count + (more ? "+" : "");
+        label.setText("<html>" + LibraryStyle.escape(name) + "&nbsp;&nbsp;<span style='color:#706e62;font-weight:normal'>"
                 + number + "</span></html>");
         label.getAccessibleContext().setAccessibleName(name + " " + count + (more ? "개 이상" : "개"));
     }
@@ -199,12 +198,7 @@ final class SearchStudio {
             outer.add(card);
             var cover = LibraryStyle.panel(new BorderLayout(0,4), 0);
             cover.setOpaque(true);
-            cover.setBackground(new Color(switch(format) {
-                case "XLS","XLSX" -> 0xE7D398;
-                case "PDF" -> 0xADBFAA;
-                case "PPT","PPTX" -> 0xE9B092;
-                default -> 0xC2D3E0;
-            }));
+            cover.setBackground(LibraryStyle.STAGE); // neutral stage: the picture, not the format, carries the color
             Icon thumb = thumbnails.apply(hit);
             if (thumb != null) {
                 cover.setBorder(new EmptyBorder(8,12,8,12));
@@ -216,7 +210,7 @@ final class SearchStudio {
                 sheet.setBorder(BorderFactory.createCompoundBorder(
                         BorderFactory.createLineBorder(new Color(0x605D5055, true)), new EmptyBorder(7,10,7,10)));
                 cover.setBorder(new EmptyBorder(10,22,8,22));
-                sheet.add(LibraryStyle.label(format + "   /   " + hit.section(),11,true,LibraryStyle.MUTED),BorderLayout.NORTH);
+                sheet.add(LibraryStyle.label(hit.section(),11,true,LibraryStyle.MUTED),BorderLayout.NORTH);
                 String text = readable(hit.displayExcerpt());
                 sheet.add(LibraryStyle.label(text.isBlank() ? name(hit) : text, 15,true,LibraryStyle.INK));
                 cover.add(sheet);
@@ -225,7 +219,7 @@ final class SearchStudio {
             var caption = LibraryStyle.panel(new GridLayout(2,1),0);
             caption.setBorder(new EmptyBorder(8,12,9,12));
             caption.setOpaque(true);
-            caption.setBackground(selected ? SELECTED : PAPER);
+            caption.setBackground(selected ? LibraryStyle.SELECTED : PAPER);
             caption.add(LibraryStyle.label(name(hit),14,true,LibraryStyle.INK));
             String where = hit.picture()==null ? hit.section() : hit.picture().location();
             if(!hit.otherSources().isEmpty()){

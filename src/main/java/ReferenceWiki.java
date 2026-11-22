@@ -2,7 +2,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.common.usermodel.fonts.FontGroup;
+import org.apache.poi.xslf.usermodel.*;
 
 import javax.imageio.ImageIO;
 import java.awt.Color;
@@ -198,6 +199,28 @@ final class ReferenceWiki {
         }
     }
 
+    // Some decks specify a Latin typeface for Korean text but omit the East Asian run font.
+    // Resolve it on the in-memory slideshow used for rendering; the source is never rewritten.
+    static void resolveHangulFonts(XSLFShape shape){
+        if(shape instanceof XSLFGroupShape group){
+            group.getShapes().forEach(ReferenceWiki::resolveHangulFonts);
+        }else if(shape instanceof XSLFTable table){
+            for(var row:table.getRows())for(var cell:row.getCells())resolveHangulFonts(cell);
+        }else if(shape instanceof XSLFTextShape text){
+            for(var paragraph:text)for(var run:paragraph.getTextRuns()){
+                if(run.getFontFamily(FontGroup.EAST_ASIAN)!=null)continue;
+                String raw=run.getRawText();
+                if(raw==null || raw.codePoints().noneMatch(c->Character.UnicodeScript.of(c)==Character.UnicodeScript.HANGUL))continue;
+                String latin=run.getFontFamily(FontGroup.LATIN);
+                String family=latin==null?"Malgun Gothic":latin;
+                var font=new java.awt.Font(family,java.awt.Font.PLAIN,12);
+                if(!font.canDisplay('한'))family="Malgun Gothic";
+                if(new java.awt.Font(family,java.awt.Font.PLAIN,12).canDisplay('한'))
+                    run.setFontFamily(family,FontGroup.EAST_ASIAN);
+            }
+        }
+    }
+
     private static BufferedImage render(XMLSlideShow show, int number) throws IOException {
         if (number < 1 || number > show.getSlides().size()) throw new EvidenceIndex.Changed();
         var size = show.getPageSize();
@@ -214,7 +237,9 @@ final class ReferenceWiki {
             graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
             graphics.scale(scale, scale);
-            show.getSlides().get(number - 1).draw(graphics);
+            var slide=show.getSlides().get(number-1);
+            slide.getShapes().forEach(ReferenceWiki::resolveHangulFonts);
+            slide.draw(graphics);
             return image;
         } catch (RuntimeException e) {
             image.flush();

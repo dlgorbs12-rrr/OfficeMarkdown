@@ -44,6 +44,7 @@ final class ReferencePanel extends JPanel {
                 new EmptyBorder(8, 12, 8, 12)));
         var actions = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT, 6, 0), 0);
         actions.add(prepare);
+        LibraryStyle.button(prepare, true);
         controls.add(actions, BorderLayout.WEST);
         controls.add(preparation);
         prepare.addActionListener(e -> {

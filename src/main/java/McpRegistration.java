@@ -21,7 +21,7 @@ final class McpRegistration {
         form.add(new JLabel("MCP 서버 이름"));
         form.add(name);
         form.add(new JLabel("등록한 에이전트는 색인된 전체 문서를 검색할 수 있습니다."));
-        if (JOptionPane.showOptionDialog(owner, form, "검색 MCP 설정", JOptionPane.DEFAULT_OPTION,
+        if (JOptionPane.showOptionDialog(owner, form, "MCP 설정", JOptionPane.DEFAULT_OPTION,
                 JOptionPane.PLAIN_MESSAGE, null, new String[]{"등록", "취소"}, "등록") != 0) return;
         var provider = (DocumentAgent.Provider) providers.getSelectedItem();
         String serverName = name.getText().strip();

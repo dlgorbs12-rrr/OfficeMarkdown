@@ -5,6 +5,7 @@ import org.commonmark.ext.gfm.tables.TablesExtension;
 import org.commonmark.parser.Parser;
 import org.commonmark.renderer.html.HtmlRenderer;
 import org.jsoup.Jsoup;
+import org.jsoup.nodes.Entities;
 import org.jsoup.safety.Safelist;
 
 final class MarkdownReader {
@@ -200,13 +201,63 @@ final class MarkdownReader {
             }
             rendered=parsed.body().html();
         }
-        String safe = Jsoup.clean(rendered,allowedTags());
+        String safe=Jsoup.clean(rendered,allowedTags());
+        if(page.section().startsWith("시트 · ") && spreadsheetNote(note)){
+            safe=collapseEmptyColumns(safe);
+        }
         for(var image:trusted.entrySet())safe=safe.replace(image.getKey(),image.getValue());
         if (marker != null) safe = safe.replace(marker, "<a name='" + PICTURE_ANCHOR + "'></a>");
-        return "<html><head><style>body {font-family:'Malgun Gothic';font-size:12pt;color:#302b40;margin:14px}"
-                +"h1,h2,h3 {color:#57419d;margin-top:10px;margin-bottom:8px} h1 {font-size:19pt} h2 {font-size:16pt}"
-                +"p {margin-top:5px;margin-bottom:9px} table {border-spacing:0} td,th {border:1px solid #dcd8e7;padding:5px}"
-                +"th {background-color:#eeeaf7;color:#3d3158} pre,code {background-color:#f4f2f7}"
-                +"</style></head><body>"+safe.replace("<table>","<table width='100%' cellpadding='6' cellspacing='1' bgcolor='#ddd9e7'>").replace("<td>","<td bgcolor='#ffffff'>").replace("<th>","<th bgcolor='#eeeaf7'>")+"</body></html>";
+        return "<html><head><style>body {font-family:'Malgun Gothic';font-size:12pt;color:#25251f;margin:16px 20px}"
+                +"h1,h2,h3 {color:#25251f;margin-top:10px;margin-bottom:8px} h1 {font-size:18pt} h2 {font-size:15pt} h3 {font-size:13pt}"
+                +"p {margin-top:5px;margin-bottom:9px} table {border-spacing:0} td,th {padding:5px}"
+                +"th {background-color:#f3f1ea;color:#4a4940;text-align:left} pre,code {background-color:#f6f4ec}"
+                +"</style></head><body>"+safe.replace("<table>","<table cellpadding='6' cellspacing='1' bgcolor='#e4e0d3'>").replace("<td>","<td bgcolor='#ffffff'>").replace("<td nowrap>","<td nowrap bgcolor='#ffffff'>")
+                .replace("<th>","<th bgcolor='#f3f1ea'>").replace("<th nowrap>","<th nowrap bgcolor='#f3f1ea'>")+"</body></html>";
+    }
+
+    private static boolean spreadsheetNote(Path note){
+        if(note==null)return false;
+        String name=note.getFileName().toString();
+        if(name.matches("(?i).+\\.xlsx?-[0-9a-f]{20}\\.md"))return true;
+        // Library.convert truncates the file name prefix to 80 UTF-16 code units.
+        if(name.length()!=104 || !name.matches("(?i).+-[0-9a-f]{20}\\.md"))return false;
+        try(var in=Files.newBufferedReader(note)){
+            in.readLine();in.readLine();
+            var source=SearchIndex.original(in.readLine());
+            return source!=null && source.getFileName().toString().matches("(?i).+\\.xlsx?");
+        }catch(IOException e){return false;}
+    }
+
+    /**
+     * Spreadsheet tables (first header cell "행") carry every column up to the widest row, so most
+     * columns are blank. Blank columns are dropped and counted in a note above the table.
+     */
+    static String collapseEmptyColumns(String html) {
+        if (!html.contains("<th>행</th>")) return html;
+        var document = Jsoup.parseBodyFragment(html);
+        document.outputSettings().prettyPrint(false);
+        for (var table : document.select("table")) {
+            var rows = table.select("tr");
+            if(rows.isEmpty() || rows.getFirst().childrenSize()<2 || !rows.getFirst().child(0).text().equals("행"))continue;
+            if(rows.getFirst().children().stream().skip(1).anyMatch(cell->!cell.text().matches("[A-Z]{1,3}")))continue;
+            int columns = rows.getFirst().childrenSize();
+            var removed = new ArrayList<String>();
+            for (int column = columns - 1; column >= 1; column--) {
+                boolean blank = true;
+                for (int r = 1; r < rows.size() && blank; r++) {
+                    var cells = rows.get(r).children();
+                    if (column < cells.size() && !cells.get(column).text().isBlank()) blank = false;
+                }
+                if (!blank || rows.size() < 2) continue;
+                removed.addFirst(rows.getFirst().child(column).text());
+                for (var row : rows) if (column < row.childrenSize()) row.child(column).remove();
+            }
+            if (!removed.isEmpty()) table.before("<p><font color='#706e62' size='2'>빈 열 " + removed.size() + "개 숨김 ("
+                    + Entities.escape(String.join(", ", removed.size() > 8
+                    ? List.of(removed.getFirst(), "…", removed.getLast()) : removed)) + ")</font></p>");
+            // Short cells keep one line so narrow columns are not broken letter by letter; long ones still wrap.
+            for (var cell : table.select("td,th")) if (cell.text().length() <= 24) cell.attr("nowrap", true);
+        }
+        return document.body().html();
     }
 }
