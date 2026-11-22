@@ -97,7 +97,7 @@ class SelectedSlidesTest {
         SearchIndex.indexCompleted(library,selected.stream().map(Path::of).toList());
         ReferenceIndex.prepare();
         var result=McpSearch.selectedSlides("architecture","architecture",null,selected,prompt->{
-            if(prompt.contains("architecture") && !prompt.contains("diagram source"))throw new java.io.IOException("fixture unavailable");
+            if(prompt.contains("architecture") && !prompt.contains("diagram source"))throw new IllegalStateException("fixture unavailable");
             return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"diagram\",\"quote\":\"diagram source\"}]";
         },status->{});
         assertEquals(selected,result.decks().stream().map(McpSearch.DeckResult::note).toList());

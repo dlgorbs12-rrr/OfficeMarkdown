@@ -99,7 +99,7 @@ final class McpSearch {
                 }
                 String inspected=(sampled?"앞쪽 장표 ":"후보 ")+trace.inspected().size()+"장 검토";
                 results.add(new DeckResult(note,inspected+" · 추천 "+slides.size()+"장",List.copyOf(slides),trace.inspected()));
-            }catch(InterruptedException ex){throw ex;}
+            }catch(InterruptedException | java.util.concurrent.CancellationException ex){throw ex;}
             catch(Exception ex){
                 if(Thread.currentThread().isInterrupted())throw new InterruptedException();
                 results.add(new DeckResult(note,"확인 실패 · "+ex.getMessage(),List.of(),candidates));
