@@ -1,5 +1,7 @@
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
 import java.io.IOException;
@@ -24,6 +26,7 @@ public final class OfficeMarkdown {
     private final JComboBox<ImageOcr.Mode> ocrMode=new JComboBox<>(ImageOcr.Mode.values());
     private final JFrame frame = new JFrame("검색 보관함 · Office Markdown");
     private final JTextField query = new JTextField(26);
+    private final ReferencePanel referencePanel = new ReferencePanel(hit -> open(hit, false, false));
     private final JComboBox<SearchIndex.Scope> scope = new JComboBox<>(SearchIndex.Scope.values());
     private final JComboBox<SearchIndex.Mode> mode = new JComboBox<>(SearchIndex.Mode.values());
     private final JButton search = new JButton("검색"), add = new JButton("파일 추가"), folder = new JButton("폴더 추가");
@@ -127,7 +130,7 @@ public final class OfficeMarkdown {
     private void show() {
         var iconUrl = OfficeMarkdown.class.getResource("/OfficeMarkdown.png");
         if (iconUrl != null) frame.setIconImage(new ImageIcon(iconUrl).getImage());
-        var updates = new UpdateDialog(frame, () -> working || indexWorker != null ||
+        var updates = new UpdateDialog(frame, () -> working || indexWorker != null || referencePanel.isWorking() ||
                 (agentDialog != null && agentDialog.isAnswering()),
                 () -> frame.dispatchEvent(new java.awt.event.WindowEvent(frame, java.awt.event.WindowEvent.WINDOW_CLOSING)),
                 message -> {
@@ -167,8 +170,10 @@ public final class OfficeMarkdown {
         searchViews.setOpaque(false);
         JButton agentSettings=new JButton("에이전트 연결 설정");
         agentSettings.addActionListener(e->{
-            if(AgentSettingsDialog.open(frame,AgentConnection.preferred())!=null && agentDialog!=null)
+            if(AgentSettingsDialog.open(frame,AgentConnection.preferred())!=null && agentDialog!=null) {
                 agentDialog.selectDefault();
+                referencePanel.reset();
+            }
         });
         agentDialog = new AgentDialog(library,hit -> {
             if (working) {
@@ -178,6 +183,8 @@ public final class OfficeMarkdown {
             scope.setSelectedItem(hit.picture() == null ? SearchIndex.Scope.ALL : SearchIndex.Scope.IMAGE);
             (hit.picture() == null ? keywordMode : imageMode).setSelected(true);
             views.show(searchViews,"local");
+            referencePanel.clearSearch();
+            updateReferenceContext();
             cancelSearch();
             readingCard = true;
             hero.setVisible(false);
@@ -235,17 +242,20 @@ public final class OfficeMarkdown {
         head.add(modes,BorderLayout.CENTER);
         agentMode.addActionListener(e -> {
             views.show(searchViews,"agent");
+            updateReferenceContext();
             agentDialog.focusQuestion();
         });
         keywordMode.addActionListener(e -> {
             views.show(searchViews,"local");
             if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE) scope.setSelectedItem(keywordScope);
             else if (lastSearch == null) refresh(""); // Leave the single agent citation and restore search results.
+            updateReferenceContext();
             query.requestFocusInWindow();
         });
         imageMode.addActionListener(e -> {
             views.show(searchViews,"local");
             scope.setSelectedItem(SearchIndex.Scope.IMAGE);
+            updateReferenceContext();
             query.requestFocusInWindow();
         });
         JPanel imageOptions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
@@ -297,10 +307,14 @@ public final class OfficeMarkdown {
         bar.add(searchActions,BorderLayout.EAST);
         searchBox.add(bar);
         recentQueries.setVisible(false);
-        searchBox.add(recentQueries, BorderLayout.SOUTH);
+        var searchOptions = LibraryStyle.panel(new BorderLayout(0, 4), 0);
+        searchOptions.add(referencePanel.controls(), BorderLayout.NORTH);
+        searchOptions.add(recentQueries, BorderLayout.SOUTH);
+        searchBox.add(searchOptions, BorderLayout.SOUTH);
         var localSearch = LibraryStyle.panel(new BorderLayout(0, 10),0);
         localSearch.add(searchBox, BorderLayout.NORTH);
         localSearch.add(contents);
+        localSearch.add(referencePanel, BorderLayout.SOUTH);
         searchViews.add(localSearch, "local");
         searchViews.add(agentDialog, "agent");
         for (JButton b : List.of(search,findBrokenOcr,repairOcr,ocrOnly,largeOptions,original,locate,note,pictureLocation,emptyButton))
@@ -432,7 +446,10 @@ public final class OfficeMarkdown {
         indexStatus.setForeground(LibraryStyle.MUTED);
         syncIndex.setToolTipText("Markdown 폴더의 변경 내용을 색인에 반영합니다.");
         LibraryStyle.button(syncIndex, false);
-        syncIndex.addActionListener(e -> startIndexSync());
+        syncIndex.addActionListener(e -> {
+            referencePanel.clearSearch();
+            startIndexSync();
+        });
         JPanel indexActions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT, 6, 0), 0);
         var maintenance = new JPopupMenu();
         for (var action : List.of(enrichPictures,ocrOnly,findBrokenOcr,largeOptions,syncIndex)) {
@@ -488,6 +505,7 @@ public final class OfficeMarkdown {
             catch (Exception ex) { error(ex); }
         });
         scope.addActionListener(e -> {
+            referencePanel.clearSearch();
             boolean nextPicture = scope.getSelectedItem() == SearchIndex.Scope.IMAGE;
             if (!nextPicture) keywordScope = (SearchIndex.Scope)scope.getSelectedItem();
             if (nextPicture != pictureInput) {
@@ -498,11 +516,20 @@ public final class OfficeMarkdown {
             }
             if (!agentMode.isSelected())
                 (scope.getSelectedItem() == SearchIndex.Scope.IMAGE ? imageMode : keywordMode).setSelected(true);
+            updateReferenceContext();
             query.putClientProperty("JTextField.placeholderText",scope.getSelectedItem() == SearchIndex.Scope.IMAGE
                     ? "그림 속 글자나 그림 설명을 입력하세요" : "파일 이름이나 문서 내용을 입력하세요");
             if (search.isEnabled() && !agentMode.isSelected()) refresh("");
         });
-        mode.addActionListener(e -> { if (search.isEnabled()) refresh(""); });
+        mode.addActionListener(e -> {
+            referencePanel.clearSearch();
+            if (search.isEnabled()) refresh("");
+        });
+        query.getDocument().addDocumentListener(new DocumentListener() {
+            public void insertUpdate(DocumentEvent e) { referencePanel.clearSearch(); }
+            public void removeUpdate(DocumentEvent e) { referencePanel.clearSearch(); }
+            public void changedUpdate(DocumentEvent e) { referencePanel.clearSearch(); }
+        });
         query.addActionListener(e -> { if (search.isEnabled()) submitQuery(); });
         query.putClientProperty("JTextField.clearCallback",(java.util.function.Consumer<JTextField>)field -> {
             field.setText(""); if (search.isEnabled()) refresh("");
@@ -558,6 +585,9 @@ public final class OfficeMarkdown {
         for (JComponent target : List.of(contents,results,gallery,preview,blank)) target.setTransferHandler(body.getTransferHandler());
         frame.setContentPane(body); frame.setSize(1160,780); frame.setMinimumSize(new Dimension(720,490));
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE); frame.setLocationRelativeTo(null);
+        frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override public void windowClosing(java.awt.event.WindowEvent e) { referencePanel.reset(); }
+        });
         frame.setVisible(true); split.setDividerLocation(.32); agentMode.doClick(); refresh("");
         updates.checkOnStartup();
     }
@@ -791,6 +821,7 @@ public final class OfficeMarkdown {
     private void busy(boolean value, String text) {
         working = value;
         if (value) cancelSearch();
+        updateReferenceContext();
         for (JButton b : List.of(search, add, folder, addDocuments, findBrokenOcr, emptyButton)) b.setEnabled(!value);
         var hit = selectedHit();
         repairOcr.setEnabled(resultView != ResultView.DOCUMENT && !value && hit != null && hit.picture() != null);
@@ -906,6 +937,17 @@ public final class OfficeMarkdown {
             }
         }
         refresh("");
+        if (referencePanel.enabled() && ReferenceSearch.requested(term)) {
+            var provider = AgentConnection.preferred();
+            String model = AgentConnection.model(provider);
+            var effort = AgentConnection.effort(provider);
+            referencePanel.search(progress -> ReferenceSearch.search(term, null, provider, model, effort, progress));
+        } else referencePanel.clearSearch();
+    }
+
+    private void updateReferenceContext() {
+        referencePanel.setAvailable(!working && keywordMode.isSelected()
+                && scope.getSelectedItem() == SearchIndex.Scope.ALL);
     }
 
     private void refresh(String summary) {
