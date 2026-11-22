@@ -1,4 +1,3 @@
-import com.google.gson.Gson;
 import java.nio.file.Path;
 import java.sql.*;
 import java.util.*;
@@ -25,57 +24,188 @@ final class RelevanceSearch {
         if(old==null || score>old.score())best.put(key,new Ranked(hit,score));
     }
     private static List<Library.Hit> top(Map<Position,Ranked> best,int limit){
-        return best.values().stream().sorted(Comparator.comparingDouble(Ranked::score).reversed()
-                .thenComparing(r->r.hit.title()).thenComparing(r->r.hit.md()).thenComparing(r->r.hit.section()))
+        return best.values().stream().sorted(RANK_ORDER)
                 .limit(limit).map(Ranked::hit).toList();
     }
     private static int minimum(int count){return Math.max(1,(count+1)/2);}
+
+    private static double textScore(List<String> words, String phrase, String title, String section, String body, int field) {
+        int covered=0,titleCount=0,sectionCount=0,bodyCount=0;
+        for(var word:words){
+            boolean t=title.contains(word),s=section.contains(word),b=body.contains(word);
+            if(t||s||b)covered++;
+            if(t)titleCount++;
+            if(s)sectionCount++;
+            if(b)bodyCount++;
+        }
+        if(covered<minimum(words.size()))return Double.NEGATIVE_INFINITY;
+        double score=covered*24+titleCount*3+sectionCount*7+bodyCount*2;
+        if(title.contains(phrase))score+=18;
+        for(int i=1;i<words.size();i++)
+            if(title.contains(words.get(i-1)+words.get(i)))score+=5;
+        if(section.contains(phrase))score+=20;
+        if(body.contains(phrase))score+=8;
+        if(field==0 && titleCount==words.size())score+=15;
+        if(field==1)score-=25;
+        return score;
+    }
+
+    private record TextDocument(long id, Path note, Path source, String title) {}
+    private static final int MAX_BUFFERED_POSITIONS = 65536;
+    private static final Comparator<Ranked> RANK_ORDER = Comparator.comparingDouble(Ranked::score).reversed()
+            .thenComparing(r -> r.hit.title()).thenComparing(r -> r.hit.md()).thenComparing(r -> r.hit.section());
+
+    // A frequent short word can match millions of sections. Finalize one source at a time,
+    // including all its converted notes, before merging that source into the global top results.
+    private static List<Library.Hit> bySource(Connection db, List<String> words, String phrase, SearchIndex.Scope scope, int limit,
+                                              List<String> shortWords, String longMatch)
+            throws SQLException {
+        var sources = new LinkedHashMap<Path,List<TextDocument>>();
+        try (var q = db.createStatement(); var r = q.executeQuery("SELECT id,md,source,title FROM visible_docs")) {
+            while (r.next()) {
+                Path source = Path.of(r.getString(3));
+                sources.computeIfAbsent(source, ignored -> new ArrayList<>())
+                        .add(new TextDocument(r.getLong(1), Path.of(r.getString(2)), source, r.getString(4)));
+            }
+        }
+        var top = new PriorityQueue<Ranked>(RANK_ORDER.reversed());
+        boolean canonicalWord = words.size() == 1 && words.getFirst().equals(phrase);
+        var headings = new HashMap<String,String>();
+        String filter = switch (scope) {
+            case TITLE -> " AND kind=0";
+            case CONTENT -> " AND kind=2";
+            default -> "";
+        };
+        var predicates = new ArrayList<>(Collections.nCopies(shortWords.size(), "instr(folded,?)>0"));
+        if (!longMatch.isEmpty()) {
+            // Keep the FTS posting list on this search connection; each source reuses it.
+            try (var create = db.createStatement()) {
+                create.execute("CREATE TEMP TABLE ranked_postings(id INTEGER PRIMARY KEY)");
+            }
+            try (var fill = db.prepareStatement("INSERT INTO ranked_postings SELECT rowid FROM terms WHERE terms MATCH ?")) {
+                fill.setString(1, longMatch);
+                fill.executeUpdate();
+            }
+            predicates.add("EXISTS (SELECT 1 FROM ranked_postings p WHERE p.id=l.id)");
+        }
+        // SQLite can spill the per-source sort to disk. Only the current section and
+        // the final result heap are kept in Java, even for one very large source.
+        String tail = filter + " AND (" + String.join(" OR ", predicates) + ") ORDER BY section COLLATE BINARY,id";
+        String select = "SELECT doc,kind,section,text FROM lines l WHERE ";
+        try (var single = db.prepareStatement(select + "doc=?" + tail);
+             var copies = db.prepareStatement(select + "doc IN (SELECT value FROM json_each(?))" + tail)) {
+            for (var q : List.of(single, copies)) {
+                int bind = 2;
+                for (String word : shortWords) q.setString(bind++, word);
+            }
+            for (var notes : sources.values()) {
+                var q = notes.size() == 1 ? single : copies;
+                var first = notes.getFirst();
+                var docs = new HashMap<Long,TextDocument>();
+                if (notes.size() == 1) q.setLong(1, first.id);
+                else {
+                    var ids = new StringJoiner(",", "[", "]");
+                    for (var doc : notes) {
+                        ids.add(Long.toString(doc.id));
+                        docs.put(doc.id, doc);
+                    }
+                    q.setString(1, ids.toString());
+                }
+                String previous = null;
+                Ranked winner = null;
+                TextDocument doc = first;
+                String title = scope == SearchIndex.Scope.CONTENT ? "" : compact(doc.title);
+                try (var r = q.executeQuery()) {
+                    while (r.next()) {
+                        String section = r.getString(3);
+                        if (!Objects.equals(previous, section)) {
+                            offer(top, winner, limit);
+                            previous = section;
+                            winner = null;
+                        }
+                        long id = r.getLong(1);
+                        if (id != doc.id) {
+                            doc = docs.get(id);
+                            title = scope == SearchIndex.Scope.CONTENT ? "" : compact(doc.title);
+                        }
+                        int kind = r.getInt(2);
+                        if (headings.size() >= 4096) headings.clear();
+                        String heading = kind == 2 ? headings.computeIfAbsent(section, RelevanceSearch::compact) : "";
+                        if (canonicalWord && top.size() == limit
+                                && textScore(words, phrase, title, heading, phrase, kind) < top.element().score) continue;
+                        String text = r.getString(4);
+                        double score = textScore(words, phrase, title, heading, compact(text), kind);
+                        if (score == Double.NEGATIVE_INFINITY || (winner != null && score <= winner.score)) continue;
+                        var hit = new Library.Hit(doc.note, doc.source, doc.title, section, text);
+                        winner = new Ranked(hit, score);
+                    }
+                }
+                offer(top, winner, limit);
+            }
+        }
+        return top.stream().sorted(RANK_ORDER).map(Ranked::hit).toList();
+    }
+
+    private static void offer(PriorityQueue<Ranked> top, Ranked winner, int limit) {
+        if (winner == null) return;
+        if (top.size() == limit) {
+            if (RANK_ORDER.compare(winner, top.element()) >= 0) return;
+            top.remove();
+        }
+        top.add(winner);
+    }
 
     static List<Library.Hit> text(Connection db,String query,SearchIndex.Scope scope,int limit)throws SQLException{
         var words=words(query);
         if(words.isEmpty())return List.of();
         String phrase=compact(query);
         var best=new HashMap<Position,Ranked>();
-        // Trigram FTS narrows long terms. The short-term branch also supports one-character Korean searches.
-        String sql="""
-                WITH words(word) AS (SELECT value FROM json_each(?)), candidates(id) AS (
-                  SELECT l.id FROM words w CROSS JOIN terms JOIN lines l ON l.id=terms.rowid
-                  WHERE length(w.word)>=3 AND terms MATCH ('"' || replace(w.word,'"','""') || '"')
-                  UNION SELECT l.id FROM words w CROSS JOIN lines l WHERE length(w.word)<3 AND instr(l.folded,w.word)>0
-                )
-                SELECT d.md,d.source,d.title,l.section,l.text,l.kind FROM candidates c
-                JOIN lines l ON l.id=c.id JOIN visible_docs d ON d.id=l.doc
-                WHERE (?=-1 OR l.kind=?) ORDER BY l.id
-                """;
+        // FTS5 trigram queries require three Unicode code points. Scan the short words together.
+        var shortWords = new ArrayList<String>();
+        var phrases = new StringJoiner(" OR ");
+        for (String word : words) {
+            if (word.codePointCount(0, word.length()) < 3) shortWords.add(word);
+            else phrases.add("\"" + word + "\"");
+        }
+        if (words.size() == 1 && !shortWords.isEmpty())
+            return bySource(db, words, phrase, scope, limit, shortWords, phrases.toString());
+        String shortMatch = String.join(" OR ", Collections.nCopies(shortWords.size(), "instr(l.folded, ?) > 0"));
+        String fields = "SELECT d.md,d.source,d.title,l.section,l.text,l.kind ";
+        String docs = " JOIN visible_docs d ON d.id=l.doc ";
         int kind=scope==SearchIndex.Scope.TITLE?0:scope==SearchIndex.Scope.CONTENT?2:-1;
-        try(var q=db.prepareStatement(sql)){
-            q.setString(1,new Gson().toJson(words));q.setInt(2,kind);q.setInt(3,kind);
+        String fieldFilter = kind == -1 ? "" : " AND l.kind=?";
+        String sql;
+        if (phrases.length() == 0) {
+            sql = fields + "FROM lines l" + docs + "WHERE (" + shortMatch + ")" + fieldFilter;
+        } else {
+            String candidates = "SELECT rowid FROM terms WHERE terms MATCH ?";
+            if (!shortWords.isEmpty()) {
+                candidates += " UNION SELECT l.id FROM lines l WHERE " + shortMatch;
+            }
+            sql = "WITH candidates(id) AS (" + candidates + ") " + fields
+                    + "FROM candidates c CROSS JOIN lines l ON l.id=c.id" + docs + "WHERE 1=1" + fieldFilter;
+        }
+        try(var q=db.prepareStatement(sql + " ORDER BY l.id")){
+            int param = 1;
+            if (phrases.length() > 0) q.setString(param++, phrases.toString());
+            for (String word : shortWords) q.setString(param++, word);
+            if (kind != -1) q.setInt(param, kind);
             try(var r=q.executeQuery()){
                 while(r.next()){
                     int field=r.getInt(6);
                     String title=scope==SearchIndex.Scope.CONTENT?"":compact(r.getString(3));
                     String section=field==2?compact(r.getString(4)):"",body=compact(r.getString(5));
-                    int covered=0,titleCount=0,sectionCount=0,bodyCount=0;
-                    for(var word:words){
-                        boolean t=title.contains(word),s=section.contains(word),b=body.contains(word);
-                        if(t||s||b)covered++;
-                        if(t)titleCount++;
-                        if(s)sectionCount++;
-                        if(b)bodyCount++;
-                    }
-                    if(covered<minimum(words.size()))continue;
-                    double score=covered*24+titleCount*3+sectionCount*7+bodyCount*2;
-                    if(title.contains(phrase))score+=18;
-                    for(int i=1;i<words.size();i++)
-                        if(title.contains(words.get(i-1)+words.get(i)))score+=5;
-                    if(section.contains(phrase))score+=20;
-                    if(body.contains(phrase))score+=8;
-                    if(field==0 && titleCount==words.size())score+=15;
-                    if(field==1)score-=25;
+                    double score = textScore(words, phrase, title, section, body, field);
+                    if (score == Double.NEGATIVE_INFINITY) continue;
                     keep(best,new Library.Hit(Path.of(r.getString(1)),Path.of(r.getString(2)),r.getString(3),
                             r.getString(4),r.getString(5)),score);
+                    if (best.size() >= Math.max(MAX_BUFFERED_POSITIONS, 4L * limit)) break;
                 }
             }
+        }
+        if (best.size() >= Math.max(MAX_BUFFERED_POSITIONS, 4L * limit)) {
+            best.clear();
+            return bySource(db, words, phrase, scope, limit, shortWords, phrases.toString());
         }
         return top(best,limit);
     }

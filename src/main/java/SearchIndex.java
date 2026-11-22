@@ -71,8 +71,10 @@ final class SearchIndex {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
         return readIndex(db -> {
             if(mode==Mode.RELEVANCE && !query.isBlank()){
-                return scope==Scope.IMAGE ? RelevanceSearch.pictures(db,query,limit,null)
-                        : RelevanceSearch.text(db,query,scope,limit);
+                if (scope==Scope.IMAGE) return RelevanceSearch.pictures(db,query,limit,null);
+                // The per-source lookup uses several statements on this dedicated read connection.
+                db.setAutoCommit(false);
+                return RelevanceSearch.text(db,query,scope,limit);
             }
             var words = query.isBlank()?List.of(""):mode.words(query);
             if (scope == Scope.IMAGE) return findPictures(db, words, mode, limit);

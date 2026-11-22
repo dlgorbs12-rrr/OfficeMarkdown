@@ -73,6 +73,61 @@ class SearchIndexTest {
         assertTrue(titles("AD 없는단어",content,and).isEmpty());
     }
 
+    @Test void relevanceCombinesTrigramAndShortCandidatesWithinScope() throws Exception {
+        String[] names = {"첫 기록", "둘째 기록", "분류표"};
+        String[] bodies = {"연동 𐐨𐐩", "아키텍처", "무관"};
+        for (int i = 0; i < names.length; i++) {
+            Files.writeString(root.resolve(i + ".md"), "# " + names[i] + "\n\n[원본 파일 열기](<"
+                    + root.resolve(i + ".pptx").toUri() + ">)\n\n## 장표\n\n" + bodies[i]);
+        }
+        var mode = SearchIndex.Mode.RELEVANCE;
+        var content = SearchIndex.Scope.CONTENT;
+        assertEquals(java.util.Set.of(names[0], names[1]), titles("연동 아키텍처", content, mode));
+        assertEquals(java.util.Set.of(names[0]), titles("𐐨𐐩", content, mode));
+        assertEquals(java.util.Set.of(names[0]), titles("𐐨𐐩 연동 아키텍처", content, mode));
+        assertEquals(java.util.Set.of(names[2]), titles("분류표 아키텍처", SearchIndex.Scope.TITLE, mode));
+    }
+
+    @Test void shortWordKeepsTheBestExcerptAcrossCopiesBeforeLimiting() throws Exception {
+        Path shared = root.resolve("shared.pptx");
+        for (String name : java.util.List.of("first", "second", "third")) {
+            String title = name.equals("second") ? "업무" : name;
+            Path source = name.equals("third") ? root.resolve("other.pptx") : shared;
+            Path note = root.resolve(name + ".md");
+            Files.writeString(note, "# " + title + "\n\n[원본 파일 열기](<" + source.toUri() + ">)"
+                    + "\n\n## 업무 계획\n\n업무 " + name + "\n업무 같은 점수");
+            SearchIndex.indexCompleted(root, java.util.List.of(note));
+        }
+        var hits = SearchIndex.searchCached(root, "업무", SearchIndex.Scope.ALL, SearchIndex.Mode.RELEVANCE, 1);
+        assertEquals(1, hits.size());
+        assertEquals(shared, hits.getFirst().source());
+        assertEquals(root.resolve("second.md"), hits.getFirst().md());
+        assertEquals("## 업무 계획", hits.getFirst().excerpt());
+    }
+
+    @Test void broadMixedQueryFindsTheLateFtsOnlyRowAfterSwitchingToPerSourceRanking() throws Exception {
+        Path note = root.resolve("broad.md");
+        Files.writeString(note, "# reference\n\n[원본 파일 열기](<" + root.resolve("broad.pptx").toUri()
+                + ">)\n\n## first\n\nseed");
+        SearchIndex.indexCompleted(root, java.util.List.of(note));
+        try (var db = java.sql.DriverManager.getConnection("jdbc:sqlite:" + SearchIndex.database());
+             var sql = db.createStatement()) {
+            sql.executeUpdate("""
+                    WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<66000)
+                    INSERT INTO lines(doc,kind,section,text,folded)
+                    SELECT (SELECT id FROM docs),2,'page '||n,'업무','업무' FROM seq
+                    """);
+            sql.executeUpdate("""
+                    INSERT INTO lines(doc,kind,section,text,folded)
+                    SELECT id,2,'업무','architecture','architecture' FROM docs
+                    """);
+        }
+        var hits = SearchIndex.searchCached(root, "업무 architecture", SearchIndex.Scope.CONTENT,
+                SearchIndex.Mode.RELEVANCE, 1);
+        assertEquals(1, hits.size());
+        assertEquals("architecture", hits.getFirst().excerpt());
+    }
+
     private java.util.Set<String> titles(String query, SearchIndex.Scope scope, SearchIndex.Mode mode) throws Exception {
         return SearchIndex.search(root,query,scope,mode,100).stream().map(Library.Hit::title)
                 .collect(java.util.stream.Collectors.toSet());
