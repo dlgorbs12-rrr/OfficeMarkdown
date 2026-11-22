@@ -52,7 +52,7 @@ final class McpSearch {
 
     static Reply chat(DocumentAgent.Provider provider,Path library,String question,String history,String model,
                       DocumentAgent.Effort effort,SearchIndex.Focus focus,Consumer<String> activity) throws Exception {
-        var adapter = AdapterDiscovery.plan(question);
+        var adapter = AdapterDiscovery.plan(question,history);
         if (adapter != null) {
             activity.accept("대상 시스템이 명시된 어댑터 설계서를 확인하는 중…");
             return AdapterDiscovery.find(adapter,focus,question);

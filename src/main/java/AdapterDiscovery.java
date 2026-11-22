@@ -13,8 +13,8 @@ final class AdapterDiscovery {
         + "(?:탐색|검색|조회|찾아|찾기|찾고|보여|필요)(?:\\s*(?:해|할|줘|주세요|해줘|해요|싶어|합니다))*[.!?？]*\\s*$",
         Pattern.CASE_INSENSITIVE);
 
-    static PmReference plan(String question) {
-        if (question == null || question.length() > 400) return null;
+    static PmReference plan(String question, String history) {
+        if ((history != null && !history.isBlank()) || question == null || question.length() > 400) return null;
         var match = LOOKUP.matcher(question);
         if (!match.matches()) return null;
         String target = match.group(1);

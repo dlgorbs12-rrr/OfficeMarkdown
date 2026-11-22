@@ -69,8 +69,9 @@ class PmReferenceTest {
         assertTrue(reply.sources().stream().allMatch(c -> c.proof().title().endsWith("설계서")
                 && !c.proof().title().contains("메일") && c.missing().isEmpty()));
         assertTrue(McpSearch.chat(null,root,query,"","",null,new SearchIndex.Focus(root.resolve("메일 Adaptor 설계서.md"),null),p->{}).sources().isEmpty());
-        assertNull(AdapterDiscovery.plan("AD 어댑터 설계서와 ERP 설계서 차이를 설명해줘"));
-        assertNull(AdapterDiscovery.plan("시스템 구성도 잘된 거 찾아줘"));
+        assertNull(AdapterDiscovery.plan("AD 어댑터 설계서와 ERP 설계서 차이를 설명해줘",""));
+        assertNull(AdapterDiscovery.plan(query,"이후 검색은 A 프로젝트 문서 안에서만 해줘"));
+        assertNull(AdapterDiscovery.plan("시스템 구성도 잘된 거 찾아줘",""));
     }
 
     private void note(String title,String content)throws Exception {
