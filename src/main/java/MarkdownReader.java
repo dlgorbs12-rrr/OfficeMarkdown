@@ -202,8 +202,7 @@ final class MarkdownReader {
             rendered=parsed.body().html();
         }
         String safe=Jsoup.clean(rendered,allowedTags());
-        if(note!=null && page.section().startsWith("시트 · ")
-                && note.getFileName().toString().matches("(?i).+\\.xlsx?-[0-9a-f]{20}\\.md")){
+        if(page.section().startsWith("시트 · ") && spreadsheetNote(note)){
             safe=collapseEmptyColumns(safe);
         }
         for(var image:trusted.entrySet())safe=safe.replace(image.getKey(),image.getValue());
@@ -214,6 +213,19 @@ final class MarkdownReader {
                 +"th {background-color:#f3f1ea;color:#4a4940;text-align:left} pre,code {background-color:#f6f4ec}"
                 +"</style></head><body>"+safe.replace("<table>","<table cellpadding='6' cellspacing='1' bgcolor='#e4e0d3'>").replace("<td>","<td bgcolor='#ffffff'>").replace("<td nowrap>","<td nowrap bgcolor='#ffffff'>")
                 .replace("<th>","<th bgcolor='#f3f1ea'>").replace("<th nowrap>","<th nowrap bgcolor='#f3f1ea'>")+"</body></html>";
+    }
+
+    private static boolean spreadsheetNote(Path note){
+        if(note==null)return false;
+        String name=note.getFileName().toString();
+        if(name.matches("(?i).+\\.xlsx?-[0-9a-f]{20}\\.md"))return true;
+        // Library.convert truncates the file name prefix to 80 UTF-16 code units.
+        if(name.length()!=104 || !name.matches("(?i).+-[0-9a-f]{20}\\.md"))return false;
+        try(var in=Files.newBufferedReader(note)){
+            in.readLine();in.readLine();
+            var source=SearchIndex.original(in.readLine());
+            return source!=null && source.getFileName().toString().matches("(?i).+\\.xlsx?");
+        }catch(IOException e){return false;}
     }
 
     /**
