@@ -19,6 +19,26 @@ class SlideSearchTest {
         return SearchIndex.searchCached(library,query,SearchIndex.Scope.ALL,SearchIndex.Mode.RELEVANCE,10);
     }
 
+    @Test void alternateEvidenceRetainsOtherQueryConstraints() throws Exception {
+        String previous = System.getProperty(SlideSearch.ENABLED);
+        try {
+            System.setProperty(SlideSearch.ENABLED,"true");
+            write("example",library.resolve("example.pptx"),
+                    "## 슬라이드 1\n전용망 연결도\n그림\n## 슬라이드 2\n기타 자료\n전용망 연결도\n"
+                    + "## 슬라이드 3\n권한 부여\n## 슬라이드 4\n등록 페이지\n");
+            SlideSearch.prepare(SearchIndex.database());
+            assertEquals(List.of("슬라이드 1"),results("장비들이 전용망으로 연결되는지 보여주는 장표 찾아줘")
+                    .stream().map(Library.Hit::section).toList());
+            assertTrue(results("격리된 장비들이 전용망으로 연결되는지 보여주는 장표 찾아줘").isEmpty());
+            assertEquals("슬라이드 3",results("권한 받기까지 보여주는 장표 찾아줘").getFirst().section());
+            assertTrue(results("택배 받기까지 보여주는 장표 찾아줘").isEmpty());
+            assertEquals("슬라이드 4",results("등록 화면 예시 찾아줘").getFirst().section());
+        } finally {
+            if (previous == null) System.clearProperty(SlideSearch.ENABLED);
+            else System.setProperty(SlideSearch.ENABLED,previous);
+        }
+    }
+
     @Test void optInBackfillsAndFollowsSourceLifecycle() throws Exception {
         String previous = System.getProperty(SlideSearch.ENABLED);
         try {
