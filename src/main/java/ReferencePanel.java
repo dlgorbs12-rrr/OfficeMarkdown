@@ -12,8 +12,8 @@ import java.util.function.Consumer;
 final class ReferencePanel extends JPanel {
     private static final int MAX_RECOMMENDATIONS = 3;
     private final JButton prepare = new JButton("장표 설명 준비");
-    private final JLabel preparation = LibraryStyle.label("", 12, false, LibraryStyle.MUTED);
-    private final JPanel controls = LibraryStyle.panel(new BorderLayout(10, 0), 0);
+    private final JTextArea preparation = LibraryStyle.wrappedText("", 13, LibraryStyle.SECONDARY);
+    private final JPanel controls = LibraryStyle.panel(new BorderLayout(0, 8), 0);
     private final JLabel status = LibraryStyle.label("", 13, false, LibraryStyle.MUTED);
     private final JButton dismiss = new JButton("닫기");
     private final DefaultListModel<ReferenceSearch.Recommendation> recommendations = new DefaultListModel<>();
@@ -42,11 +42,16 @@ final class ReferencePanel extends JPanel {
         setBackground(Color.WHITE);
         setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(LibraryStyle.LINE),
                 new EmptyBorder(8, 12, 8, 12)));
-        var actions = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT, 6, 0), 0);
+        var actions = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT, 0, 0), 0);
         actions.add(prepare);
         LibraryStyle.button(prepare, true);
-        controls.add(actions, BorderLayout.WEST);
-        controls.add(preparation);
+        controls.add(actions, BorderLayout.NORTH);
+        preparation.setRows(3);
+        var progress = new JScrollPane(preparation, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
+                ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        progress.setBorder(null);
+        progress.getViewport().setBackground(Color.WHITE);
+        controls.add(progress);
         prepare.addActionListener(e -> {
             if (prepareWorker == null) startPreparation();
             else cancelPreparation(true);
@@ -201,7 +206,6 @@ final class ReferencePanel extends JPanel {
         prepare.setText("준비 취소");
         setPreparationStatus("보관함의 PPTX를 확인하는 중…");
         prepareWorker = new SwingWorker<>() {
-            private volatile String latest = "";
 
             @Override protected String doInBackground() throws Exception {
                 var plan = ReferenceWiki.plan();
@@ -216,7 +220,7 @@ final class ReferencePanel extends JPanel {
                             JOptionPane.OK_CANCEL_OPTION)==JOptionPane.OK_OPTION);
                 });
                 if (!approved.get() || isCancelled()) return "장표 설명 준비를 취소했습니다.";
-                return ReferenceWiki.prepare(message -> { latest = message; publish(message); },plan);
+                return ReferenceWiki.prepare(this::publish,plan);
             }
 
             @Override protected void process(List<String> updates) {
@@ -232,8 +236,8 @@ final class ReferencePanel extends JPanel {
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
                 } catch (ExecutionException ex) {
-                    setPreparationStatus(latest.isBlank() ? "장표 설명 준비를 완료하지 못했습니다."
-                            : "장표 설명 준비 미완료 · " + latest);
+                    String detail = ex.getCause().getMessage();
+                    setPreparationStatus(detail == null || detail.isBlank() ? "장표 설명을 준비하지 못했습니다." : detail);
                 }
             }
         };
@@ -242,7 +246,7 @@ final class ReferencePanel extends JPanel {
 
     private void setPreparationStatus(String message) {
         preparation.setText(message);
-        preparation.setToolTipText(message.isBlank() ? null : message);
+        preparation.setCaretPosition(0);
     }
 
     private void cancelPreparation(boolean announce) {
