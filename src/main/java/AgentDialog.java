@@ -384,6 +384,7 @@ final class AgentDialog extends JPanel {
         }
         if(!reply.candidates().isEmpty()){
             var panel=new FoundDocuments(reply.candidates());
+            panel.onScope(notes->{targets.select(notes);checkedScope();question.requestFocusInWindow();});
             panel.onSearch(notes->findSelectedSlides(panel,prompt,context,reply.expanded(),scope,notes));
             var reopen=new JButton("이 답변에서 찾은 문서 보기");
             reopen.addActionListener(e->showFound(panel));body.add(reopen);showFound(panel);

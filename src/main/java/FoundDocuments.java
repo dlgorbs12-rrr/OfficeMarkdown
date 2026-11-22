@@ -9,6 +9,10 @@ import javax.swing.*;
 final class FoundDocuments extends JPanel {
     private final Set<Path> checked=new LinkedHashSet<>();
     private final Map<Path,JCheckBox> choices=new LinkedHashMap<>();
+    private final Set<Path> presentations=new HashSet<>();
+    private final JButton ask=new JButton("질문 범위로 사용");
+    private Consumer<List<String>> useScope=notes->{};
+    void onScope(Consumer<List<String>> action){useScope=action;}
     private final JButton search=new JButton();
     private final JLabel status=new JLabel();
     private boolean busy;
@@ -19,39 +23,31 @@ final class FoundDocuments extends JPanel {
         super(new BorderLayout(0,6));
         var rows=new JPanel();
         rows.setLayout(new BoxLayout(rows,BoxLayout.Y_AXIS));
-        var seen=new HashSet<Path>();
         for(var hit:candidates){
-            if(!seen.add(hit.md()))continue;
-            JComponent row;
-            if(hit.source().toString().toLowerCase(Locale.ROOT).endsWith(".pptx")){
-                var box=new JCheckBox();
-                box.putClientProperty("html.disable",true);
-                box.setText(hit.title());
-                box.addItemListener(e->{
-                    if(box.isSelected())checked.add(hit.md());else checked.remove(hit.md());
-                    updateAction();
-                });
-                choices.put(hit.md(),box);
-                row=box;
-            }else{
-                var label=new JLabel();
-                label.putClientProperty("html.disable",true);
-                label.setText(hit.title());
-                label.setToolTipText("이 파일 형식은 슬라이드 검색을 지원하지 않습니다.");
-                row=label;
-            }
-            row.setAlignmentX(Component.LEFT_ALIGNMENT);
-            row.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE,Math.max(28,row.getPreferredSize().height)));
-            rows.add(row);
+            if(choices.containsKey(hit.md()))continue;
+            if(hit.source().toString().toLowerCase(Locale.ROOT).endsWith(".pptx"))presentations.add(hit.md());
+            var box=new JCheckBox();
+            box.putClientProperty("html.disable",true);
+            box.setText(hit.title());
+            box.setToolTipText(hit.source().toString());
+            box.addItemListener(e->{
+                if(box.isSelected())checked.add(hit.md());else checked.remove(hit.md());
+                updateAction();
+            });
+            choices.put(hit.md(),box);
+            box.setAlignmentX(Component.LEFT_ALIGNMENT);
+            box.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE,Math.max(28,box.getPreferredSize().height)));
+            rows.add(box);
         }
         var content=new JPanel(new BorderLayout());
         content.add(rows,BorderLayout.NORTH);
         var footer=new JPanel(new BorderLayout(0,5));
-        footer.add(status,BorderLayout.NORTH);footer.add(search,BorderLayout.SOUTH);
+        footer.add(status,BorderLayout.NORTH);var actions=new JPanel(new java.awt.GridLayout(0,1,0,3));
+        actions.add(ask);actions.add(search);footer.add(actions,BorderLayout.SOUTH);
         add(new JScrollPane(content));add(footer,BorderLayout.SOUTH);
-        status.setText(seen.isEmpty()?"질문을 보내면 찾은 문서가 표시됩니다.":choices.isEmpty()
-                ?"이번 답변에는 슬라이드를 찾을 PPTX 문서가 없습니다.":"체크칸이나 PPTX 문서명을 눌러 선택하세요.");
-        search.addActionListener(e->{if(!checked.isEmpty() && !busy)submit.accept(checked.stream().map(Path::toString).toList());});
+        status.setText(choices.isEmpty()?"질문을 보내면 찾은 문서가 표시됩니다.":"슬라이드 검색에는 선택한 PPTX만 사용합니다.");
+        ask.addActionListener(e->useScope.accept(checked.stream().map(Path::toString).toList()));
+        search.addActionListener(e->submit.accept(checked.stream().filter(presentations::contains).map(Path::toString).toList()));
         updateAction();
     }
     void setStatus(String text){status.setText(text);status.setToolTipText(text);}
@@ -61,7 +57,10 @@ final class FoundDocuments extends JPanel {
         updateAction();
     }
     private void updateAction(){
-        search.setText("선택한 문서에서 슬라이드 찾기 ("+checked.size()+")");
-        search.setEnabled(!busy && !checked.isEmpty());
+        long slides=checked.stream().filter(presentations::contains).count();
+        ask.setText("질문 범위로 사용 · 문서 "+checked.size()+"개");
+        ask.setEnabled(!busy && !checked.isEmpty());
+        search.setText("슬라이드 찾기 · PPTX "+slides+"개");
+        search.setEnabled(!busy && slides>0);
     }
 }
