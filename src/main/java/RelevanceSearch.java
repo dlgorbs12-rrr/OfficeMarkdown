@@ -5,14 +5,31 @@ import java.util.regex.Pattern;
 
 /** Ranked retrieval. The literal and Boolean search modes keep their own match semantics. */
 final class RelevanceSearch {
-    private static final Pattern SEPARATORS=Pattern.compile("[\\p{Z}\\s_·./()\\[\\]-]+");
     private static final Pattern WORD=Pattern.compile("[\\p{L}\\p{N}]+");
     static List<String> words(String query){
         return WORD.matcher(query.toLowerCase(Locale.ROOT)).results().map(r->r.group())
                 .distinct().limit(16).toList();
     }
-    private static String compact(String text){
-        return SEPARATORS.matcher(text.toLowerCase(Locale.ROOT)).replaceAll("");
+    static String compact(String text){
+        String lower = text.toLowerCase(Locale.ROOT);
+        int length = lower.length();
+        StringBuilder joined = null;
+        int start = 0;
+        for (int i = 0; i < length; i++) {
+            char c = lower.charAt(i);
+            if (!separator(c)) continue;
+            if (joined == null) joined = new StringBuilder(length);
+            joined.append(lower, start, i);
+            start = i + 1;
+        }
+        return joined == null ? lower : joined.append(lower, start, length).toString();
+    }
+
+    private static boolean separator(char c) {
+        return switch (c) {
+            case ' ', '\t', '\n', '\u000B', '\f', '\r', '_', '·', '.', '/', '(', ')', '[', ']', '-' -> true;
+            default -> c >= '\u00A0' && Character.isSpaceChar(c);
+        };
     }
 
     private record Ranked(Library.Hit hit,double score){}
