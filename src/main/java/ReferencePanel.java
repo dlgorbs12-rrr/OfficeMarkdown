@@ -11,7 +11,6 @@ import java.util.function.Consumer;
 /** Recommendations and caption preparation leave the regular search model untouched. */
 final class ReferencePanel extends JPanel {
     private static final int MAX_RECOMMENDATIONS = 3;
-    private final JCheckBox option = new JCheckBox("AI 참고 장표", ReferenceSearch.enabled());
     private final JButton prepare = new JButton("장표 설명 준비");
     private final JLabel preparation = LibraryStyle.label("", 12, false, LibraryStyle.MUTED);
     private final JPanel controls = LibraryStyle.panel(new BorderLayout(10, 0), 0);
@@ -44,19 +43,9 @@ final class ReferencePanel extends JPanel {
         setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(LibraryStyle.LINE),
                 new EmptyBorder(8, 12, 8, 12)));
         var actions = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT, 6, 0), 0);
-        option.setToolTipText("참고 장표 검색 시 질문과 후보의 텍스트를 연결된 AI에 보냅니다. 전체 범위의 키워드 검색에서 사용합니다.");
-        prepare.setToolTipText("보관함의 PPTX에서 장표 설명을 준비합니다. 장표 이미지를 연결된 AI에 보냅니다.");
-        actions.add(option);
         actions.add(prepare);
         controls.add(actions, BorderLayout.WEST);
         controls.add(preparation);
-        controls.setVisible(false);
-        option.addActionListener(e -> {
-            ReferenceSearch.enabled(option.isSelected());
-            if (!option.isSelected()) reset();
-            prepare.setVisible(option.isSelected());
-        });
-        prepare.setVisible(option.isSelected());
         prepare.addActionListener(e -> {
             if (prepareWorker == null) startPreparation();
             else cancelPreparation(true);
@@ -123,11 +112,10 @@ final class ReferencePanel extends JPanel {
     void setAvailable(boolean value) {
         if (available == value) return;
         available = value;
-        controls.setVisible(value);
-        if (!value) reset();
+        if (!value) clearSearch();
     }
 
-    boolean enabled() { return available && option.isSelected(); }
+    boolean enabled() { return available; }
 
     boolean isWorking() { return searchWorker != null || prepareWorker != null; }
 
@@ -209,14 +197,25 @@ final class ReferencePanel extends JPanel {
     }
 
     private void startPreparation() {
-        if (!enabled()) return;
         prepare.setText("준비 취소");
         setPreparationStatus("보관함의 PPTX를 확인하는 중…");
         prepareWorker = new SwingWorker<>() {
             private volatile String latest = "";
 
             @Override protected String doInBackground() throws Exception {
-                return ReferenceWiki.prepare(message -> { latest = message; publish(message); });
+                var plan = ReferenceWiki.plan();
+                if (plan.isEmpty()) return "준비할 장표 설명이 없습니다.";
+                var approved = new java.util.concurrent.atomic.AtomicBoolean();
+                int slides = plan.stream().mapToInt(ReferenceWiki.Target::slides).sum();
+                SwingUtilities.invokeAndWait(() -> {
+                    if (prepareWorker != this || isCancelled() || !controls.isShowing()) return;
+                    String prompt = "문서 " + plan.size() + "개 · 장표 " + slides
+                            + "장의 이미지를 " + AgentConnection.preferred() + "에 보냅니다. AI 사용량이 발생합니다. 진행할까요?";
+                    approved.set(JOptionPane.showConfirmDialog(controls,prompt,"장표 설명 준비",
+                            JOptionPane.OK_CANCEL_OPTION)==JOptionPane.OK_OPTION);
+                });
+                if (!approved.get() || isCancelled()) return "장표 설명 준비를 취소했습니다.";
+                return ReferenceWiki.prepare(message -> { latest = message; publish(message); },plan);
             }
 
             @Override protected void process(List<String> updates) {

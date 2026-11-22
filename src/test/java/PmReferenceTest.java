@@ -76,8 +76,19 @@ class PmReferenceTest {
         SearchIndex.setDocumentRole(relabelled, "어댑터 설계서");
         assertEquals(1, McpSearch.chat(null,root,query,"","",null,new SearchIndex.Focus(relabelled,null),p->{}).sources().size());
         String followUp = "AD 어댑터 설계서 참고 자료 찾아줘";
-        assertEquals(McpSearch.Route.CHAT,McpSearch.route(followUp,"이후 검색은 A 프로젝트 문서 안에서만 해줘",AdapterDiscovery.plan(followUp),true));
-        assertEquals(McpSearch.Route.ADAPTER,McpSearch.route(followUp,"",AdapterDiscovery.plan(followUp),true));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route(followUp,"이후 검색은 A 프로젝트 문서 안에서만 해줘",AdapterDiscovery.plan(followUp)));
+        assertEquals(McpSearch.Route.ADAPTER,McpSearch.route(followUp,"",AdapterDiscovery.plan(followUp)));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("정책 설계서 참고 자료 찾아줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("시스템 아키텍처 설계서를 찾아줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("슬라이드를 PDF로 저장하는 방법을 알려줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("시스템 아키텍처를 설명한 문서 좀 찾아줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("시스템 구성도가 있는 문서를 한 개 추천해줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("슬라이드 디자인에 어울리는 글꼴을 추천해줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("PPT를 PDF로 변환하려면 어떤 프로그램이 필요해?","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("정책 설계서와 시스템 구성도를 찾아줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("워크숍 단체 사진 한 장 찾아줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("지난달 영수증 한 장 찾아줘","",null));
+        assertEquals(McpSearch.Route.SLIDES,McpSearch.route("착수보고서에 쓸 시스템 구성도 잘된 거 찾아줘","",null));
         assertNull(AdapterDiscovery.plan("시스템 구성도 잘된 거 찾아줘"));
     }
 
