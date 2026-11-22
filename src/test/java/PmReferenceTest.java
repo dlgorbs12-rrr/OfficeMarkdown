@@ -57,6 +57,30 @@ class PmReferenceTest {
         assertEquals(0,progress.getLast().updated());
     }
 
+    @Test void chatFindsNamedAdapterDesignsWithoutGenericOrSlideResults() throws Exception {
+        String query="AD 어댑터 설계 초본을 만들기 위한 자료 탐색";
+        note("교육청 AD Adaptor 설계서","## 계정 매핑\n| 컬럼명 | Mapping |\n");
+        note("Active Directory 어댑터 설계서 (교육청)","## 조직\n| 필드명 | Mapping |\n");
+        note("메일 Adaptor 설계서","## 설정\nAD와 별도 운영\n");
+        note("AD 어댑터 설계 교육 가이드","## 교육 일정\n설계서 작성 교육 소개\n");
+        note("[회의록] AD 어댑터 설계","## 안건\n설계 검토\n");
+        note("AD 운영 가이드","## 계정\n| 필드명 | Mapping |\n");
+        SearchIndex.synchronize(root,p->{});
+        var reply=McpSearch.chat(null,root,query,"","",null,null,p->{});
+        assertEquals(2,reply.sources().size());
+        assertTrue(reply.sources().stream().allMatch(c -> c.proof().title().contains("설계서")
+                && !c.proof().title().contains("메일") && c.missing().isEmpty()));
+        assertTrue(McpSearch.chat(null,root,query,"","",null,new SearchIndex.Focus(root.resolve("메일 Adaptor 설계서.md"),null),p->{}).sources().isEmpty());
+        assertNull(AdapterDiscovery.plan("AD 어댑터 설계서와 ERP 설계서 차이를 설명해줘"));
+        Path relabelled = root.resolve("AD 어댑터 설계 교육 가이드.md");
+        SearchIndex.setDocumentRole(relabelled, "어댑터 설계서");
+        assertEquals(1, McpSearch.chat(null,root,query,"","",null,new SearchIndex.Focus(relabelled,null),p->{}).sources().size());
+        String followUp = "AD 어댑터 설계서 참고 자료 찾아줘";
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route(followUp,"이후 검색은 A 프로젝트 문서 안에서만 해줘",AdapterDiscovery.plan(followUp),true));
+        assertEquals(McpSearch.Route.ADAPTER,McpSearch.route(followUp,"",AdapterDiscovery.plan(followUp),true));
+        assertNull(AdapterDiscovery.plan("시스템 구성도 잘된 거 찾아줘"));
+    }
+
     private void note(String title,String content)throws Exception {
         Files.writeString(root.resolve(title+".md"),"# "+title+"\n\n[원본 파일 열기](<"
                 +root.resolve(title+".xlsx").toUri()+">)\n\n"+content);

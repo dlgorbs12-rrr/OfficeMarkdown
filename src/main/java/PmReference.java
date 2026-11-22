@@ -23,6 +23,8 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
     }
 
     private static final Pattern SIGNAL=Pattern.compile("wbs|일정표|작업.?(일정|분해)|공정표|어댑터|어댑타|어뎁터|ad[ao]pt[eo]r",Pattern.CASE_INSENSITIVE);
+    private static final Pattern SUPPORTING_MATERIAL = Pattern.compile(
+            "가이드|매뉴얼|회의록|교육(?:자료|교재|일정|안내|과정|용)|작성지침|발표자료|검토의견|작성법|guide|manual|training|minutes",Pattern.CASE_INSENSITIVE);
     private static final Pattern SURVEY_NAME=Pattern.compile("사전[\\s_-]*조사(서|표|지)?");
     static Kind classify(String text){
         String s=fold(text);
@@ -97,10 +99,14 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
     }
     private record Ranked(DocumentAgent.Claim claim,int score,int excerptScore){}
     List<DocumentAgent.Claim> search(Connection db,SearchIndex.Focus focus,String question)throws SQLException{
+        return search(db,focus,question,false);
+    }
+
+    List<DocumentAgent.Claim> search(Connection db,SearchIndex.Focus focus,String question,boolean requireTarget)throws SQLException{
         // In a title such as "AD Adaptor", only the separate AD token identifies the system.
         Map<String,Pattern> idPatterns=new LinkedHashMap<>();
-        for(String id:identifiers)if(id.matches("[A-Za-z0-9]{1,3}"))
-            idPatterns.put(id,Pattern.compile("(?i)(?<![a-z0-9])"+Pattern.quote(id)+"(?![a-z0-9])"));
+        for(String id:identifiers)if(id.matches(requireTarget ? "[A-Za-z0-9]+" : "[A-Za-z0-9]{1,3}"))
+            idPatterns.put(id,Pattern.compile("(?i)(?<![a-z0-9])(?:"+ (id.equalsIgnoreCase("AD") ? "AD|Active[\\s_-]*Directory" : Pattern.quote(id)) +")(?![a-z0-9])"));
         var headingTerms=new LinkedHashSet<>(topics);
         for(String topic:topics)for(String part:topic.split("[\\s_-]+")){
             if(part.length()>1 && !List.of("항목","예시","시트","정보","정의","설계").contains(part))headingTerms.add(part);
@@ -126,7 +132,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
         };
         // A manual role takes precedence, including an explicit unclassified selection.
         type="(d.role='"+kind.name()+"' OR (d.role='' AND "+type+"))";
-        String sql="SELECT d.md,d.source,d.title,l.section,substr(l.text,1,2000) FROM visible_docs d JOIN lines l ON l.doc=d.id "
+        String sql="SELECT d.md,d.source,d.title,l.section,substr(l.text,1,2000),d.manual_role FROM visible_docs d JOIN lines l ON l.doc=d.id "
                 +"WHERE "+type+" AND l.kind=2 AND l.text NOT LIKE '## %' AND l.text NOT LIKE '%| --- |%' "
                 +(focus==null?"":"AND d.md=? ")+(focus!=null && focus.section()!=null?"AND l.section=? ":"")+"ORDER BY d.id,l.id";
         record Section(String md,String section){}
@@ -137,11 +143,14 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                 while(rs.next()){
                     String name=rs.getString(3),section=rs.getString(4),line=rs.getString(5);
                     String body=fold(line),heading=fold(section),file=fold(name);
+                    if(requireTarget && rs.getString(6)==null && SUPPORTING_MATERIAL.matcher(file).find())continue;
                     int fileIds=0,rowIds=0;
                     for(String id:identifiers){
                         if(identifies(id,name,file,idPatterns))fileIds++;
                         if(identifies(id,line,body,idPatterns))rowIds++;
                     }
+                    if(requireTarget && fileIds==0 && identifiers.stream().noneMatch(id ->
+                            identifies(id,section,heading,idPatterns)))continue;
                     if(kind!=Kind.ADAPTER && kind!=Kind.WBS && identifiers.stream().anyMatch(id ->
                             !identifies(id,name,file,idPatterns) && !identifies(id,section,heading,idPatterns)
                                     && !identifies(id,line,body,idPatterns)))continue;
@@ -204,7 +213,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
             }
         }
         var ordered=best.values().stream().sorted(Comparator.comparingInt(Ranked::score).reversed()).map(Ranked::claim);
-        if(kind!=Kind.WBS && kind!=Kind.ADAPTER){
+        if(requireTarget || (kind!=Kind.WBS && kind!=Kind.ADAPTER)){
             var documents=new HashSet<Path>();
             ordered=ordered.filter(c->documents.add(c.proof().source()));
         }
