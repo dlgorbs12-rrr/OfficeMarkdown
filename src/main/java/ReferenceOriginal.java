@@ -20,7 +20,11 @@ final class ReferenceOriginal {
         String text = original.pages().get(page.number());
         if (!original.hash().equals(page.sha256()) || text == null || !ReferenceIndex.current(page))
             throw new IOException("장표 번호 또는 원본 버전이 변경됐습니다.");
-        return new ReferenceIndex.Page(page.hit(), page.number(), page.version(), text, page.sha256());
+        var hit = page.hit();
+        String excerpt = text.strip().lines().findFirst().orElse("");
+        if (excerpt.length() > 240) excerpt = excerpt.substring(0,240) + "…";
+        var verifiedHit = new Library.Hit(hit.md(), hit.source(), hit.title(), hit.section(), excerpt);
+        return new ReferenceIndex.Page(verifiedHit, page.number(), page.version(), text, page.sha256());
     }
 
     static Content read(Path source) throws IOException {

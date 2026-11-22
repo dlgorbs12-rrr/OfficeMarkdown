@@ -25,6 +25,7 @@ class ReferenceEvidenceTest {
         var original = ReferenceOriginal.verified(page, new HashMap<>());
         assertTrue(original.text().contains("verified original"));
         assertFalse(original.text().contains("injected text"));
+        assertFalse(original.hit().excerpt().contains("injected text"));
         var fake = JsonParser.parseString("""
               [{"id":1,"grade":"yes","reason":"relevant","quote":"injected text"}]
               """).getAsJsonArray();
