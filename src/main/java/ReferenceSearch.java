@@ -9,7 +9,9 @@ final class ReferenceSearch {
     // Optimize clear requests for a visual artifact. Other wording goes to the conversational agent,
     // which can consult both document and slide tools while retaining the full request.
     private static final Pattern SLIDE_REQUEST = Pattern.compile(
-            "(?:장표|슬라이드|구성도|구조도|배치도|흐름도|한\\s*장|아키텍처\\s*(?:그림|다이어그램)|(?:비교|절차)\\s*그림|\\bpptx?)"
+            "^\\s*(?:(?:착수|완료|중간)보고서에\\s*(?:쓸|넣을)\\s*)?"
+            + "(?:(?:전체|시스템|서비스|서버|네트워크|인프라|업무|프로세스)\\s*){0,4}"
+            + "(?:장표|슬라이드|구성도|구조도|배치도|흐름도|아키텍처\\s*(?:그림|다이어그램)|(?:비교|절차)\\s*그림|\\bpptx?)"
             + "(?:를|을|가|이|는|은|로)?\\s*(?:(?:잘\\s*(?:된|만든)\\s*(?:거|것)|예시|사례|참고본|몇\\s*장|한\\s*장)(?:를|을)?\\s*)?"
             + "(?:찾아\\s*(?:줘|주세요|봐)|추천(?:해\\s*(?:줘|주세요))?|보여\\s*(?:줘|주세요)|필요(?:해요?|합니다)|있(?:을까|나요|어))"
             + "[.!?？~]*\\s*$",Pattern.CASE_INSENSITIVE);

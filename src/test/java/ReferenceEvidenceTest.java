@@ -61,7 +61,7 @@ class ReferenceEvidenceTest {
 
     @Test void routesOrdinaryReferenceQuestionsAndPreservesExactLookups() {
         assertTrue(ReferenceSearch.requested("시스템 구성도 잘된 거 찾아줘"));
-        assertTrue(ReferenceSearch.requested("전체 서비스가 어떻게 연결되는지 한 장이 필요해"));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("전체 서비스가 어떻게 연결되는지 한 장이 필요해","",null));
         assertFalse(ReferenceSearch.requested("REQ-011 슬라이드 찾아줘"));
         assertFalse(ReferenceSearch.requested("엑셀 구성도 목록"));
     }
