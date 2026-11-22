@@ -61,13 +61,12 @@ class ReferenceWikiTest {
             color.addNewAlpha().setVal(20000);
             show.write(output);
         }
+        // The shadow is dropped on the in-memory copy only; previewing must leave the source untouched.
+        var original = Files.readAllBytes(source);
         index(source);
         ReferenceIndex.prepare();
         var image = ReferenceWiki.preview(ReferenceIndex.pages(source).getFirst());
         assertEquals(Color.RED.getRGB(), colorOf(image));
-        // The shadow is dropped on the in-memory copy only; previewing again must leave the source untouched.
-        var original = Files.readAllBytes(source);
-        ReferenceWiki.preview(ReferenceIndex.pages(source).getFirst());
         assertArrayEquals(original, Files.readAllBytes(source));
     }
 
