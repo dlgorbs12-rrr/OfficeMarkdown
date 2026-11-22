@@ -73,6 +73,21 @@ class SearchIndexTest {
         assertTrue(titles("AD 없는단어",content,and).isEmpty());
     }
 
+    @Test void relevanceCombinesTrigramAndShortCandidatesWithinScope() throws Exception {
+        String[] names = {"첫 기록", "둘째 기록", "분류표"};
+        String[] bodies = {"연동 𐐨𐐩", "아키텍처", "무관"};
+        for (int i = 0; i < names.length; i++) {
+            Files.writeString(root.resolve(i + ".md"), "# " + names[i] + "\n\n[원본 파일 열기](<"
+                    + root.resolve(i + ".pptx").toUri() + ">)\n\n## 장표\n\n" + bodies[i]);
+        }
+        var mode = SearchIndex.Mode.RELEVANCE;
+        var content = SearchIndex.Scope.CONTENT;
+        assertEquals(java.util.Set.of(names[0], names[1]), titles("연동 아키텍처", content, mode));
+        assertEquals(java.util.Set.of(names[0]), titles("𐐨𐐩", content, mode));
+        assertEquals(java.util.Set.of(names[0]), titles("𐐨𐐩 연동 아키텍처", content, mode));
+        assertEquals(java.util.Set.of(names[2]), titles("분류표 아키텍처", SearchIndex.Scope.TITLE, mode));
+    }
+
     private java.util.Set<String> titles(String query, SearchIndex.Scope scope, SearchIndex.Mode mode) throws Exception {
         return SearchIndex.search(root,query,scope,mode,100).stream().map(Library.Hit::title)
                 .collect(java.util.stream.Collectors.toSet());

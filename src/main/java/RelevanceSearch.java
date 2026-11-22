@@ -36,20 +36,34 @@ final class RelevanceSearch {
         if(words.isEmpty())return List.of();
         String phrase=compact(query);
         var best=new HashMap<Position,Ranked>();
-        // Trigram FTS narrows long terms. The short-term branch also supports one-character Korean searches.
-        String sql="""
-                WITH words(word) AS (SELECT value FROM json_each(?)), candidates(id) AS (
-                  SELECT l.id FROM words w CROSS JOIN terms JOIN lines l ON l.id=terms.rowid
-                  WHERE length(w.word)>=3 AND terms MATCH ('"' || replace(w.word,'"','""') || '"')
-                  UNION SELECT l.id FROM words w CROSS JOIN lines l WHERE length(w.word)<3 AND instr(l.folded,w.word)>0
-                )
-                SELECT d.md,d.source,d.title,l.section,l.text,l.kind FROM candidates c
-                JOIN lines l ON l.id=c.id JOIN visible_docs d ON d.id=l.doc
-                WHERE (?=-1 OR l.kind=?) ORDER BY l.id
-                """;
+        // FTS5 trigram queries require three Unicode code points. Scan the short words together.
+        var shortWords = new ArrayList<String>();
+        var phrases = new StringJoiner(" OR ");
+        for (String word : words) {
+            if (word.codePointCount(0, word.length()) < 3) shortWords.add(word);
+            else phrases.add("\"" + word + "\"");
+        }
+        String shortMatch = String.join(" OR ", Collections.nCopies(shortWords.size(), "instr(l.folded, ?) > 0"));
+        String fields = "SELECT d.md,d.source,d.title,l.section,l.text,l.kind ";
+        String docs = " JOIN visible_docs d ON d.id=l.doc ";
         int kind=scope==SearchIndex.Scope.TITLE?0:scope==SearchIndex.Scope.CONTENT?2:-1;
-        try(var q=db.prepareStatement(sql)){
-            q.setString(1,new Gson().toJson(words));q.setInt(2,kind);q.setInt(3,kind);
+        String fieldFilter = kind == -1 ? "" : " AND l.kind=?";
+        String sql;
+        if (phrases.length() == 0) {
+            sql = fields + "FROM lines l" + docs + "WHERE (" + shortMatch + ")" + fieldFilter;
+        } else {
+            String candidates = "SELECT rowid FROM terms WHERE terms MATCH ?";
+            if (!shortWords.isEmpty()) {
+                candidates += " UNION SELECT l.id FROM lines l WHERE " + shortMatch;
+            }
+            sql = "WITH candidates(id) AS (" + candidates + ") " + fields
+                    + "FROM candidates c CROSS JOIN lines l ON l.id=c.id" + docs + "WHERE 1=1" + fieldFilter;
+        }
+        try(var q=db.prepareStatement(sql + " ORDER BY l.id")){
+            int param = 1;
+            if (phrases.length() > 0) q.setString(param++, phrases.toString());
+            for (String word : shortWords) q.setString(param++, word);
+            if (kind != -1) q.setInt(param, kind);
             try(var r=q.executeQuery()){
                 while(r.next()){
                     int field=r.getInt(6);
