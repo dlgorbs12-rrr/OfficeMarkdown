@@ -24,7 +24,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
 
     private static final Pattern SIGNAL=Pattern.compile("wbs|일정표|작업.?(일정|분해)|공정표|어댑터|어댑타|어뎁터|ad[ao]pt[eo]r",Pattern.CASE_INSENSITIVE);
     private static final Pattern SUPPORTING_MATERIAL = Pattern.compile(
-            "가이드|매뉴얼|회의록|교육|작성지침|발표자료|검토의견|작성법|guide|manual|training|minutes",Pattern.CASE_INSENSITIVE);
+            "가이드|매뉴얼|회의록|교육(?:자료|교재|일정|안내|과정|용)|작성지침|발표자료|검토의견|작성법|guide|manual|training|minutes",Pattern.CASE_INSENSITIVE);
     private static final Pattern SURVEY_NAME=Pattern.compile("사전[\\s_-]*조사(서|표|지)?");
     static Kind classify(String text){
         String s=fold(text);
@@ -143,7 +143,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                 while(rs.next()){
                     String name=rs.getString(3),section=rs.getString(4),line=rs.getString(5);
                     String body=fold(line),heading=fold(section),file=fold(name);
-                    if(requireTarget && rs.getString(6)==null && file.contains("설계") && SUPPORTING_MATERIAL.matcher(file.substring(file.indexOf("설계")+2)).find())continue;
+                    if(requireTarget && rs.getString(6)==null && SUPPORTING_MATERIAL.matcher(file).find())continue;
                     int fileIds=0,rowIds=0;
                     for(String id:identifiers){
                         if(identifies(id,name,file,idPatterns))fileIds++;
