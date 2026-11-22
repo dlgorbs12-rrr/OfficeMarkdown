@@ -56,7 +56,7 @@ final class FoundDocuments extends JPanel {
             var empty=new JPanel(new java.awt.GridBagLayout());
             empty.setOpaque(false);
             var hint=emptyHint=new JLabel("<html><div style='text-align:center'>질문을 보내면 답변에 쓰인 문서가 여기에 표시됩니다.<br>"
-                    +"문서를 골라 질문 범위로 쓰거나 PPTX에서 슬라이드를 더 찾을 수 있습니다.</div></html>",SwingConstants.CENTER);
+                    +"골라서 질문 범위로 쓰거나 슬라이드를 더 찾을 수 있습니다.</div></html>",SwingConstants.CENTER);
             hint.setFont(LibraryStyle.TYPE.deriveFont(13f));
             hint.setForeground(LibraryStyle.MUTED);
             empty.add(hint);
