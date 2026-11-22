@@ -52,6 +52,18 @@ final class McpSearch {
 
     static Reply chat(DocumentAgent.Provider provider,Path library,String question,String history,String model,
                       DocumentAgent.Effort effort,SearchIndex.Focus focus,Consumer<String> activity) throws Exception {
+        if(ReferenceSearch.enabled() && ReferenceSearch.requested(question)){
+            var recommendations=ReferenceSearch.search(question,focus,provider,model,effort,activity);
+            var claims=new ArrayList<DocumentAgent.Claim>();
+            var message=new StringBuilder();
+            for(var item:recommendations){
+                String id="E"+(claims.size()+1);
+                var page=item.page();
+                claims.add(new DocumentAgent.Claim(id,page.hit(),List.of(new SearchIndex.Evidence(0,"","장표 원문",item.quote())),List.of(),item.reason(),page));
+                message.append(item.reason()).append(" [").append(id).append("]\n\n");
+            }
+            return new Reply(claims.isEmpty()?"현재 검색 범위의 후보에서 직접 참고할 장표를 확인하지 못했습니다.":message.toString().strip(),List.copyOf(claims));
+        }
         Path session=Files.createTempDirectory("office-chat-mcp-");
         try{
             var options=options(session,provider,library,focus);

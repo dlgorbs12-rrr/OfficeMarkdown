@@ -11,6 +11,31 @@ public final class OfficeSearch {
     public static void main(String[] args) {
         try {
             args = windowsLauncherArguments(args);
+            if(args.length==1 && args[0].equals("--prepare-reference")){
+                ReferenceIndex.prepare();
+                System.out.println("Reference page index ready");
+                return;
+            }
+            if(args.length>1 && args[0].equals("--reference-trace")){
+                boolean override=args.length>=4 && args[1].equals("--provider");
+                var question=String.join(" ",Arrays.copyOfRange(args,override?3:1,args.length));
+                var provider=override ? DocumentAgent.Provider.valueOf(args[2].toUpperCase(Locale.ROOT)) : AgentConnection.preferred();
+                var usage=new ArrayList<ReferenceSearch.Usage>();
+                var reader=ReferenceSearch.reader(provider,AgentConnection.model(provider),AgentConnection.effort(provider),usage::add);
+                long start=System.nanoTime();
+                var trace=ReferenceSearch.evaluate(question,null,reader,System.err::println);
+                var result=new LinkedHashMap<String,Object>();
+                result.put("status","ok");
+                result.put("candidates",trace.candidates().stream().map(OfficeSearch::referencePage).toList());
+                result.put("inspected",trace.inspected().stream().map(OfficeSearch::referencePage).toList());
+                result.put("recommended",trace.recommended().stream().map(r->referencePage(r.page())).toList());
+                result.put("elapsed_ms",(System.nanoTime()-start)/1e6);
+                result.put("provider",provider.name());
+                result.put("model",ReferenceSearch.model(provider,AgentConnection.model(provider)));
+                result.put("usage",usage);
+                System.out.write((new Gson().toJson(result)+"\n").getBytes(StandardCharsets.UTF_8));
+                return;
+            }
             if (args.length == 1 && args[0].equals("--prepare-slide-search")) {
                 SlideSearch.prepare(SearchIndex.database());
                 return;
@@ -44,6 +69,8 @@ public final class OfficeSearch {
                         System.out.println("OfficeSearch.exe --excel-cells SCREEN|INTERFACE REQ-ID MARKDOWN SHEET [SECOND_MARKDOWN SECOND_SHEET]");
                         System.out.println("OfficeSearch.exe --prepare-slide-search  (experimental slide index for an existing library)");
                         System.out.println("OfficeSearch.exe --experimental-slides QUERY");
+                        System.out.println("OfficeSearch.exe --prepare-reference  (local page indexing only)");
+                        System.out.println("OfficeSearch.exe --reference-trace [--provider CODEX|CLAUDE|COPILOT] QUERY  (uses configured AI; ranked, inspected and recommended page IDs)");
                         return;
                     }
                     default -> terms.add(args[i]);
@@ -79,6 +106,9 @@ public final class OfficeSearch {
         }
     }
 
+    private static Map<String,Object> referencePage(ReferenceIndex.Page p){
+        return Map.of("source",p.hit().source().toString(),"number",p.number(),"version",p.version(),"sha256",p.sha256());
+    }
     private static void excelCells(String[] args) throws Exception {
         if (args.length != 5 && args.length != 7)
             throw new IllegalArgumentException("--excel-cells SCREEN|INTERFACE REQ-ID MARKDOWN SHEET [SECOND_MARKDOWN SECOND_SHEET]");
