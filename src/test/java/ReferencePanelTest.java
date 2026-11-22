@@ -48,7 +48,7 @@ class ReferencePanelTest {
                 oldPublished.countDown();
                 return List.of();
             });
-            var status = find(view, JLabel.class, label -> label.getText().equals("장표 후보를 찾는 중…"));
+            var status = find(view, JLabel.class, label -> label.getText().equals("검색어와 맞는 슬라이드를 찾는 중…"));
             assertNotNull(status);
             status.addPropertyChangeListener("text", event -> {
                 String value = (String) event.getNewValue();
@@ -107,7 +107,7 @@ class ReferencePanelTest {
             view.setAvailable(true);
 
             var preview = find(view, JLabel.class,
-                    label -> "선택한 장표 미리보기".equals(label.getAccessibleContext().getAccessibleName()));
+                    label -> "선택한 슬라이드 미리보기".equals(label.getAccessibleContext().getAccessibleName()));
             assertNotNull(preview);
             preview.addPropertyChangeListener("icon", event -> {
                 if (event.getNewValue() instanceof ImageIcon) rendered.countDown();

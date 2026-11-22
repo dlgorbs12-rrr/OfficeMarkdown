@@ -26,7 +26,8 @@ public final class OfficeMarkdown {
     private final JComboBox<ImageOcr.Mode> ocrMode=new JComboBox<>(ImageOcr.Mode.values());
     private final JFrame frame = new JFrame("검색 보관함 · Office Markdown");
     private final JTextField query = new JTextField(26);
-    private final JButton recommendSlides = new JButton("이 결과에서 참고 장표 추천");
+    private final JButton recommendSlides = new JButton("AI로 슬라이드 찾기");
+    private final JPanel slideAction = LibraryStyle.panel(new BorderLayout(8,0),0);
     private List<String> resultNotes = List.of();
     private final ReferencePanel referencePanel = new ReferencePanel(hit -> open(hit, false, false));
     private final JComboBox<SearchIndex.Scope> scope = new JComboBox<>(SearchIndex.Scope.values());
@@ -328,12 +329,16 @@ public final class OfficeMarkdown {
         localSearch.add(searchBox, BorderLayout.NORTH);
         localSearch.add(contents);
         var referenceArea = LibraryStyle.panel(new BorderLayout(0,4),0);
-        var referenceAction = LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,0,0),0);
-        recommendSlides.setToolTipText("현재 결과의 PPTX에서 질문과 후보 장표 텍스트를 연결된 AI에 보내 추천받습니다.");
-        recommendSlides.setVisible(false);
+        String slideHelp = "검색 결과의 PowerPoint 파일에서 검색어에 맞는 슬라이드를 최대 3장 골라 미리 보여줍니다.";
+        var slideHint = LibraryStyle.label(slideHelp, 13, false, LibraryStyle.MUTED);
+        slideHint.setLabelFor(recommendSlides);
+        recommendSlides.getAccessibleContext().setAccessibleDescription(slideHelp);
+        recommendSlides.setToolTipText("검색어와 후보 슬라이드의 텍스트를 연결된 AI에 보냅니다.");
         recommendSlides.addActionListener(e -> recommendFromResults());
-        referenceAction.add(recommendSlides);
-        referenceArea.add(referenceAction,BorderLayout.NORTH);
+        slideAction.add(recommendSlides,BorderLayout.WEST);
+        slideAction.add(slideHint);
+        slideAction.setVisible(false);
+        referenceArea.add(slideAction,BorderLayout.NORTH);
         referenceArea.add(referencePanel);
         localSearch.add(referenceArea, BorderLayout.SOUTH);
         searchViews.add(localSearch, "local");
@@ -962,7 +967,7 @@ public final class OfficeMarkdown {
     }
 
     private void recommendFromResults() {
-        if (!recommendSlides.isVisible() || resultNotes.isEmpty()) return;
+        if (!slideAction.isVisible() || resultNotes.isEmpty()) return;
         var notes = resultNotes;
         String question = displayedSearch.needle();
         var provider = AgentConnection.preferred();
@@ -972,14 +977,14 @@ public final class OfficeMarkdown {
 
     private void invalidateRecommendations() {
         resultNotes = List.of();
-        recommendSlides.setVisible(false);
+        slideAction.setVisible(false);
         referencePanel.clearSearch();
     }
 
     private void updateReferenceContext() {
         boolean available = !working && keywordMode.isSelected() && scope.getSelectedItem()!=SearchIndex.Scope.IMAGE;
         referencePanel.setAvailable(available);
-        recommendSlides.setVisible(available && !resultNotes.isEmpty());
+        slideAction.setVisible(available && !resultNotes.isEmpty());
     }
 
     private void refresh(String summary) {

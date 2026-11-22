@@ -52,7 +52,7 @@ final class ReferencePanel extends JPanel {
         });
 
         var header = LibraryStyle.panel(new BorderLayout(10, 0), 0);
-        var title = LibraryStyle.label("추천 장표", 15, true, LibraryStyle.INK);
+        var title = LibraryStyle.label("추천 슬라이드", 15, true, LibraryStyle.INK);
         title.setLabelFor(list);
         header.add(title, BorderLayout.WEST);
         header.add(status);
@@ -61,7 +61,7 @@ final class ReferencePanel extends JPanel {
             if (searchWorker == null) clearSearch();
             else {
                 clearSearch();
-                showStatus("장표 추천을 취소했습니다.");
+                showStatus("슬라이드 추천을 취소했습니다.");
             }
         });
         add(header, BorderLayout.NORTH);
@@ -93,7 +93,7 @@ final class ReferencePanel extends JPanel {
         detail.add(text);
 
         preview.setHorizontalAlignment(SwingConstants.CENTER);
-        preview.getAccessibleContext().setAccessibleName("선택한 장표 미리보기");
+        preview.getAccessibleContext().setAccessibleName("선택한 슬라이드 미리보기");
         var previewBox = LibraryStyle.panel(new BorderLayout(0, 4), 0);
         previewBox.add(preview);
         var fileActions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT, 0, 0), 0);
@@ -138,7 +138,7 @@ final class ReferencePanel extends JPanel {
     void search(Search request) {
         clearSearch();
         if (!enabled()) return;
-        showStatus("장표 후보를 찾는 중…");
+        showStatus("검색어와 맞는 슬라이드를 찾는 중…");
         dismiss.setText("추천 취소");
         searchWorker = new SwingWorker<>() {
             @Override protected SearchResult doInBackground() throws Exception {
@@ -165,7 +165,7 @@ final class ReferencePanel extends JPanel {
                     var items = result.items();
                     if (items.isEmpty()) {
                         setStatus(result.hasStalePages() ? "추천 원본이 변경되었습니다. 최신 장표를 보려면 다시 검색하세요."
-                                : "현재 검색 범위에서 근거를 확인한 추천 장표가 없습니다.");
+                                : "현재 검색 범위에서 근거를 확인한 추천 슬라이드가 없습니다.");
                         return;
                     }
                     recommendations.addAll(items);
@@ -178,7 +178,7 @@ final class ReferencePanel extends JPanel {
                     var cause = ex.getCause();
                     boolean timedOut = cause instanceof TimeoutException
                             || cause.getMessage() != null && cause.getMessage().contains("시간 초과");
-                    setStatus((timedOut ? "AI 장표 추천 응답 시간이 초과되었습니다." : "AI 장표 추천을 완료하지 못했습니다.")
+                    setStatus((timedOut ? "AI 슬라이드 추천 응답 시간이 초과되었습니다." : "AI 슬라이드 추천을 완료하지 못했습니다.")
                             + " 일반 검색 결과는 계속 이용할 수 있습니다.");
                 }
             }
@@ -288,12 +288,12 @@ final class ReferencePanel extends JPanel {
                 try {
                     var icon = get();
                     preview.setIcon(icon);
-                    preview.setText(icon == null ? "장표 미리보기를 표시할 수 없습니다." : "");
+                    preview.setText(icon == null ? "슬라이드 미리보기를 표시할 수 없습니다." : "");
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
                 } catch (ExecutionException ex) {
                     if (ex.getCause() instanceof EvidenceIndex.Changed) removeStale(item);
-                    else preview.setText("장표 미리보기를 표시할 수 없습니다.");
+                    else preview.setText("슬라이드 미리보기를 표시할 수 없습니다.");
                 }
             }
         };
