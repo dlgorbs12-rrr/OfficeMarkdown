@@ -7,6 +7,31 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SelectedSlidesTest {
     @TempDir Path folder;
+    @Test void presentationControlsSubmitOnlyCurrentlyCheckedDocuments() throws Exception {
+        var check=new java.util.concurrent.FutureTask<Void>(()->{
+            var a=new Library.Hit(folder.resolve("a.md"),folder.resolve("a.pptx"),"A","","");
+            var b=new Library.Hit(folder.resolve("b.md"),folder.resolve("b.PPTX"),"B","","");
+            var x=new Library.Hit(folder.resolve("c.md"),folder.resolve("c.xlsx"),"C","","");
+            var panel=new FoundDocuments(List.of(a,b,a,x));
+            var choices=FoundDocuments.class.getDeclaredField("choices");choices.setAccessible(true);
+            var controls=(Map<?,?>)choices.get(panel);
+            assertEquals(Set.of(a.md(),b.md()),controls.keySet());
+            var first=(javax.swing.JCheckBox)controls.get(a.md());
+            var second=(javax.swing.JCheckBox)controls.get(b.md());
+            var action=FoundDocuments.class.getDeclaredField("search");action.setAccessible(true);
+            var button=(javax.swing.JButton)action.get(panel);
+            var requests=new ArrayList<List<String>>();panel.onSearch(requests::add);
+            first.doClick();second.doClick();
+            assertTrue(requests.isEmpty());
+            panel.busy(true);assertFalse(first.isEnabled());assertFalse(button.isEnabled());
+            panel.busy(false);button.doClick();first.doClick();button.doClick();second.doClick();
+            assertEquals(List.of(List.of(a.md().toString(),b.md().toString()),List.of(b.md().toString())),requests);
+            assertFalse(button.isEnabled());
+            return null;
+        });
+        javax.swing.SwingUtilities.invokeAndWait(check);
+        check.get();
+    }
     @Test void emptyFollowUpClearsTheActiveSelectionButEarlierReplyCanReopenIt() throws Exception {
         var check=new java.util.concurrent.FutureTask<Void>(()->{
             var chat=new AgentDialog(folder,hit->{},hit->{});
@@ -18,13 +43,13 @@ class SelectedSlidesTest {
             var hit=new Library.Hit(folder.resolve("a.md"),folder.resolve("a.pptx"),"A","slide","a");
             display.invoke(chat,body,new McpSearch.Reply("A",List.of(),List.of(hit),"A"),"A","",null);
             var previous=(FoundDocuments)tab.getComponent(0);
-            var t=FoundDocuments.class.getDeclaredField("table");t.setAccessible(true);
+            var t=FoundDocuments.class.getDeclaredField("choices");t.setAccessible(true);
             var action=FoundDocuments.class.getDeclaredField("search");action.setAccessible(true);
-            ((javax.swing.JTable)t.get(previous)).setValueAt(true,0,0);
+            ((javax.swing.JCheckBox)((Map<?,?>)t.get(previous)).get(hit.md())).doClick();
             display.invoke(chat,new javax.swing.JPanel(),new McpSearch.Reply("B",List.of()),"B","A",null);
             var current=tab.getComponent(0);
             assertNotSame(previous,current);
-            assertEquals(0,((javax.swing.JTable)t.get(current)).getRowCount());
+            assertEquals(0,((Map<?,?>)t.get(current)).size());
             assertFalse(((javax.swing.JButton)action.get(current)).isEnabled());
             ((javax.swing.JButton)body.getComponent(body.getComponentCount()-1)).doClick();
             assertSame(previous,tab.getComponent(0));
