@@ -94,7 +94,11 @@ def run(exe, frozen, output, data, baseline=None):
     for task, question in tasks.items():
         proc = subprocess.run([str(exe.resolve()), "--reference-trace", "--provider", "CODEX", question], env=env,
                               capture_output=True, encoding="utf-8", errors="replace")
-        trace = json.loads(proc.stdout) if proc.returncode == 0 else dict(status="error", exit_code=proc.returncode)
+        if proc.returncode == 0:
+            # The packaged JVM may emit a logging-provider diagnostic before the final JSON record.
+            trace = json.loads(proc.stdout.strip().splitlines()[-1])
+        else:
+            trace = dict(status="error", exit_code=proc.returncode)
         if trace["status"] == "ok":
             validate(trace, documents)
         traces[task] = trace
