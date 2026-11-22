@@ -13,6 +13,7 @@ final class SlideSearch {
             "보여주는", "설명할", "설명하는", "보고", "싶어", "필요해", "참고할", "한눈에", "보이는",
             "정리한", "장으로", "한", "쓸", "때", "있어", "어떻게", "잘된거", "누구", "거쳐가는지");
     private static final Set<String> MODIFIERS = Set.of("추진", "진행", "수행", "전체");
+    private static final Set<String> NODE_TYPES = Set.of("서버", "장비", "노드", "시스템");
     private static final Pattern SUFFIX = Pattern.compile(
             "(?<=..)(?:되는지|하는지|기까지|하는|받기까지|부터|까지|으로|에서|에게|들이|로|를|을|이|가|은|는|과|와)$");
     private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}]+");
@@ -27,20 +28,44 @@ final class SlideSearch {
     static String match(String query) {
         var groups = new LinkedHashSet<String>();
         String normalized = query.toLowerCase(Locale.ROOT).replace("다른 사람 대신", "대리");
+        var stems = new LinkedHashSet<String>();
+        String medium = null;
         for (var word : WORD.matcher(normalized).results().map(m -> m.group()).toList()) {
             if (REQUEST.contains(word)) continue;
             String stem = SUFFIX.matcher(word).replaceFirst("");
             if (REQUEST.contains(stem) || MODIFIERS.contains(stem)) continue;
+            stems.add(stem);
+            if (word.endsWith("로") && !word.equals(stem)) medium = stem;
+        }
+        // A network diagram may label the topology only in its heading. Keep every
+        // additional qualifier mandatory; a generic diagram does not satisfy this clause.
+        if (medium != null && !NODE_TYPES.contains(medium) && stems.contains("연결")) {
+            var nodes = stems.stream().filter(NODE_TYPES::contains).toList();
+            if (nodes.size() == 1 && !medium.equals("연결")) {
+                String node = nodes.getFirst();
+                stems.removeAll(Set.of(node, medium, "연결"));
+                String literal = prefix(node) + " AND " + prefix(medium) + " AND \"연결\"*";
+                String heading = "heading:" + prefix(medium) + " AND heading:(\"구성도\"* OR \"연결도\"* OR \"토폴로지\"*)";
+                groups.add("((" + literal + ") OR (" + heading + "))");
+            }
+        }
+        for (String stem : stems) {
             // Terms come only from the alphanumeric tokenizer, never from raw FTS syntax.
             String group = switch (stem) {
                 case "일정", "일정표", "스케줄", "스케줄표" -> "(\"일정\"* OR \"스케줄\"*)";
                 case "흐름", "과정", "절차", "프로세스" -> "(\"흐름\"* OR \"과정\"* OR \"절차\"* OR \"프로세스\"*)";
                 case "신입사원", "입사자" -> "(\"신입\"* OR \"입사\"*)";
-                default -> "\"" + stem + "\"*";
+                case "받기", "받는" -> stems.contains("권한") ? "(" + prefix(stem) + " OR \"부여\"* OR \"획득\"*)" : prefix(stem);
+                case "화면", "페이지" -> "(\"화면\"* OR \"페이지\"*)";
+                default -> prefix(stem);
             };
             groups.add(group);
         }
         return String.join(" AND ", groups);
+    }
+
+    private static String prefix(String word) {
+        return "\"" + word + "\"*";
     }
 
     static boolean installed(Connection db) throws SQLException {
@@ -116,7 +141,7 @@ final class SlideSearch {
         insert.executeUpdate();
     }
 
-    static List<Library.Hit> search(Connection db, String query, int limit) throws SQLException {
+    static List<Library.Hit> search(Connection db, String query, int limit, boolean hasQueue) throws SQLException {
         String terms = match(query);
         if (terms.isEmpty()) return List.of();
         var hits = new ArrayList<Library.Hit>();
@@ -124,9 +149,9 @@ final class SlideSearch {
         var seen = new HashSet<Position>();
         String sql = """
                 SELECT d.md,d.source,d.title,p.section,snippet(slide_terms,1,'','',' … ',18)
-                FROM slide_terms JOIN slide_pages p ON p.id=slide_terms.rowid JOIN visible_docs d ON d.id=p.doc
+                FROM slide_terms JOIN slide_pages p ON p.id=slide_terms.rowid JOIN (SELECT d.* FROM docs d %s) d ON d.id=p.doc
                 WHERE slide_terms MATCH ? ORDER BY rank
-                """;
+                """.formatted(SearchIndex.visibilityPredicate(hasQueue));
         try (var q = db.prepareStatement(sql)) {
             q.setString(1,terms);
             try (var r = q.executeQuery()) {

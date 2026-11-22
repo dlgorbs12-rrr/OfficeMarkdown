@@ -71,20 +71,22 @@ final class SearchIndex {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
         boolean slideRequest = mode == Mode.RELEVANCE && scope == Scope.ALL
                 && Boolean.getBoolean(SlideSearch.ENABLED) && SlideSearch.requested(query);
+        if (slideRequest) {
+            var result = preparedSlideSearch(query, limit);
+            if (result.isPresent()) return result.get();
+        }
         return readIndex(db -> {
             if(mode==Mode.RELEVANCE && !query.isBlank()){
                 if (scope==Scope.IMAGE) return RelevanceSearch.pictures(db,query,limit,null);
                 // The per-source lookup uses several statements on this dedicated read connection.
                 db.setAutoCommit(false);
-                if (slideRequest && SlideSearch.installed(db))
-                    return SlideSearch.search(db, query, limit);
                 return RelevanceSearch.text(db,query,scope,limit);
             }
             var words = query.isBlank()?List.of(""):mode.words(query);
             if (scope == Scope.IMAGE) return findPictures(db, words, mode, limit);
             if (words.size() <= 1) return find(db, words.isEmpty() ? "" : words.getFirst(), scope, limit);
             return findWords(db, words, scope, mode, limit);
-        }, !slideRequest);
+        });
     }
 
     static List<Library.Hit> libraryCards(Path root, int limit) throws IOException {
@@ -134,17 +136,39 @@ final class SearchIndex {
         List<T> run(Connection db) throws SQLException;
     }
 
-    static <T> List<T> readIndex(Query<T> query) throws IOException {
-        return readIndex(query, true);
-    }
-
-    private static <T> List<T> readIndex(Query<T> query, boolean includePictures) throws IOException {
-        Path database = database();
-        if (!Files.isRegularFile(database)) return List.of();
+    private static Connection openReader(Path database) throws SQLException {
         var config = new SQLiteConfig();
         config.setReadOnly(true);
         config.setBusyTimeout(1_500);
-        try (Connection db = DriverManager.getConnection("jdbc:sqlite:" + database, config.toProperties());
+        return DriverManager.getConnection("jdbc:sqlite:" + database, config.toProperties());
+    }
+
+    static String visibilityPredicate(boolean hasQueue) {
+        return hasQueue ? " WHERE NOT EXISTS (SELECT 1 FROM large_pending p WHERE p.md=d.md)" : "";
+    }
+
+    private static Optional<List<Library.Hit>> preparedSlideSearch(String query, int limit) throws IOException {
+        Path path = database();
+        if (!Files.isRegularFile(path)) return Optional.of(List.of());
+        try (var db = openReader(path); var sql = db.createStatement()) {
+            db.setAutoCommit(false);
+            try (var tables = sql.executeQuery("""
+                    SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='slide_pages'),
+                           EXISTS(SELECT 1 FROM sqlite_master WHERE name='large_pending')
+                    """)) {
+                tables.next();
+                if (!tables.getBoolean(1)) return Optional.empty();
+                return Optional.of(SlideSearch.search(db,query,limit,tables.getBoolean(2)));
+            }
+        } catch (SQLException e) {
+            throw new IOException("장표 검색 색인을 열지 못했습니다. " + e.getMessage(), e);
+        }
+    }
+
+    static <T> List<T> readIndex(Query<T> query) throws IOException {
+        Path database = database();
+        if (!Files.isRegularFile(database)) return List.of();
+        try (Connection db = openReader(database);
              Statement sql = db.createStatement()) {
             // Opening can race with creation of a brand-new index. Its schema is published in one transaction.
             try (var tables = sql.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docs'")) {
@@ -161,9 +185,8 @@ final class SearchIndex {
             }
             String role=hasRoles?"coalesce(r.manual,r.inferred,'')":"''";
             String join=hasRoles?" LEFT JOIN document_roles r ON r.md=d.md":"";
-            String predicate = hasQueue ? " WHERE NOT EXISTS (SELECT 1 FROM large_pending p WHERE p.md=d.md)" : "";
+            String predicate = visibilityPredicate(hasQueue);
             sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.*,"+role+" AS role FROM main.docs d"+join + predicate);
-            if (!includePictures) return query.run(db);
             boolean hasPictureText;
             try(var t=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='picture_search_ocr'")){
                 hasPictureText=t.next();
