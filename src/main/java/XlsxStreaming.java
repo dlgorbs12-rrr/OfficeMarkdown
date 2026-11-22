@@ -46,14 +46,28 @@ final class XlsxStreaming {
     private static final Pattern ESCAPED_CHARACTER = Pattern.compile("_x([0-9A-Fa-f]{4})_");
 
     static void write(Path file, Path workDir, Writer out, PictureAssets pictures) throws Exception {
+        scan(file,workDir,out,pictures,null);
+    }
+
+    static List<EvidenceIndex.Edge> relations(Path snapshot) throws IOException {
+        var edges = new ArrayList<EvidenceIndex.Edge>();
+        try {
+            scan(snapshot,snapshot.getParent(),null,null,edges);
+        } catch (IOException e) { throw e; }
+        catch (Exception e) { throw new IOException("Excel 원본 셀을 읽지 못했습니다.",e); }
+        return edges;
+    }
+
+    private static void scan(Path file, Path workDir, Writer out, PictureAssets pictures,
+                             List<EvidenceIndex.Edge> edges) throws Exception {
         if (FileMagic.valueOf(file.toFile()) == FileMagic.OLE2) {
-            writeOleContainer(file, workDir, out, pictures);
+            writeOleContainer(file, workDir, out, pictures,edges);
         } else {
-            writeZip(file, workDir, out, pictures);
+            writeZip(file, workDir, out, pictures,edges);
         }
     }
 
-    private static void writeOleContainer(Path file, Path workDir, Writer out, PictureAssets pictures) throws Exception {
+    private static void writeOleContainer(Path file, Path workDir, Writer out, PictureAssets pictures,List<EvidenceIndex.Edge> edges) throws Exception {
         try (var container = new POIFSFileSystem(file.toFile(), true)) {
             var root = container.getRoot();
             if (root.hasEntryCaseInsensitive(OOXML_PACKAGE) || root.hasEntryCaseInsensitive(Decryptor.DEFAULT_POIFS_ENTRY)) {
@@ -64,14 +78,15 @@ final class XlsxStreaming {
                         try (var output = Files.newOutputStream(unpacked)) {
                             in.transferTo(output);
                         }
-                        writeZip(unpacked, workDir, out, pictures);
+                        writeZip(unpacked, workDir, out, pictures,edges);
                     } finally {
                         Files.deleteIfExists(unpacked);
                     }
                 }
             } else if (root.hasEntryCaseInsensitive("Workbook") || root.hasEntryCaseInsensitive("Book")) {
                 try (var workbook = new HSSFWorkbook(root, true)) {
-                    Library.spreadsheet(workbook, out, pictures);
+                    if (edges == null) Library.spreadsheet(workbook, out, pictures);
+                    else ExcelRelations.scanWorkbook(workbook,edges);
                 }
             } else {
                 throw new IOException("XLSX 컨테이너에서 통합 문서를 찾을 수 없습니다.");
@@ -79,7 +94,7 @@ final class XlsxStreaming {
         }
     }
 
-    private static void writeZip(Path file, Path workDir, Writer out, PictureAssets pictures) throws Exception {
+    private static void writeZip(Path file, Path workDir, Writer out, PictureAssets pictures,List<EvidenceIndex.Edge> edges) throws Exception {
         try (OPCPackage pkg = OPCPackage.open(file.toFile(), PackageAccess.READ)) {
             var reader = new XSSFReader(pkg);
             var workbook = new WorkbookProperties();
@@ -97,12 +112,20 @@ final class XlsxStreaming {
                 while (sheets.hasNext()) {
                     try (InputStream sheet = sheets.next()) {
                         String name = sheets.getSheetName();
+                        if (edges != null) {
+                            if (!ExcelRelations.example(name)) {
+                                var scan = new ExcelRelations.SheetScan(name,edges);
+                                parse(sheet,new Worksheet(null,strings,styles,workbook.date1904,scan));
+                                scan.finish();
+                            }
+                            continue;
+                        }
                         out.write("\n## " + Library.sheetSection(name) + "\n\n");
                         Path spool = Files.createTempFile(workDir, ".xlsx-cells-", ".tmp");
                         try {
                             Worksheet handler;
                             try (var data = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(spool)))) {
-                                handler = new Worksheet(data, strings, styles, workbook.date1904);
+                                handler = new Worksheet(data, strings, styles, workbook.date1904,null);
                                 parse(sheet, handler);
                             }
                             if (handler.drawingId != null) {
@@ -146,6 +169,7 @@ final class XlsxStreaming {
     // an explicitly styled blank cell near the end changes the table width.
     private static final class Worksheet extends DefaultHandler {
         private final DataOutputStream data;
+        private final ExcelRelations.SheetScan scan;
         private final XlsxStreamingStrings strings;
         private final NumberFormats styles;
         private final XlsxStreamingNumbers display;
@@ -167,7 +191,8 @@ final class XlsxStreaming {
         private String type, style, formulaType, formulaRef, sharedId, drawingId;
 
         Worksheet(DataOutputStream data, XlsxStreamingStrings strings, NumberFormats styles,
-                  boolean date1904) {
+                  boolean date1904, ExcelRelations.SheetScan scan) {
+            this.scan = scan;
             this.data = data;
             this.strings = strings;
             this.styles = styles;
@@ -180,6 +205,7 @@ final class XlsxStreaming {
             depth++;
             if (!MAIN_NS.equals(ns)) return;
             try {
+                if (scan != null && worksheet && name.equals("mergeCell")) scan.merge(CellRangeAddress.valueOf(attributes.getValue("ref")));
                 if (depth == 1) {
                     worksheet = name.equals("worksheet");
                 } else if (depth == 2) {
@@ -311,6 +337,10 @@ final class XlsxStreaming {
             if (!hasValue && !hasInline && expression == null && !"b".equals(type)) return;
             String formatted = formatValue(expression != null);
             if (expression == null && formatted.isBlank()) return;
+            if (scan != null) {
+                scan.cell(row,column,expression != null || "e".equals(type) ? "#UNREADABLE" : formatted);
+                return;
+            }
             data.writeInt(row);
             data.writeInt(column);
             writeText(data, formatted);
