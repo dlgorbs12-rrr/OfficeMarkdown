@@ -387,6 +387,8 @@ final class SearchIndex {
         sql.execute("CREATE VIRTUAL TABLE IF NOT EXISTS terms USING fts5(folded,content='lines',content_rowid='id',tokenize='trigram')");
         sql.execute("CREATE TRIGGER IF NOT EXISTS terms_add AFTER INSERT ON lines BEGIN INSERT INTO terms(rowid,folded) VALUES(new.id,new.folded); END");
         sql.execute("CREATE TRIGGER IF NOT EXISTS terms_del AFTER DELETE ON lines BEGIN INSERT INTO terms(terms,rowid,folded) VALUES('delete',old.id,old.folded); END");
+        RankedFields.prepare(sql.getConnection());
+        if(SlideSearch.installed(sql.getConnection()))SlideSearch.ensureCurrent(sql.getConnection(),sql);
         sql.execute("CREATE TABLE IF NOT EXISTS pictures(id INTEGER PRIMARY KEY, doc INTEGER REFERENCES docs ON DELETE CASCADE,"
                 + " path TEXT, location TEXT, section TEXT, text TEXT, folded TEXT)");
         sql.execute("CREATE INDEX IF NOT EXISTS doc_pictures ON pictures(doc)");
@@ -468,6 +470,7 @@ final class SearchIndex {
             sql.executeUpdate("INSERT INTO main.docs(md,stamp,source,title) SELECT d.md,stamp,source,title FROM legacy.docs d JOIN incoming i ON i.id=d.id");
             String join = " JOIN incoming i ON i.id=v.doc JOIN main.docs d ON d.md=i.md ORDER BY v.id";
             sql.executeUpdate("INSERT INTO main.lines(doc,kind,section,text,folded) SELECT d.id,v.kind,v.section,v.text,v.folded FROM legacy.lines v" + join);
+            RankedFields.indexSelected(db,"SELECT d.id FROM main.docs d JOIN incoming i ON i.md=d.md");
             if (SlideSearch.installed(db))
                 SlideSearch.indexSelected(db, "SELECT d.id FROM main.docs d JOIN incoming i ON i.md=d.md WHERE lower(d.source) LIKE '%.pptx'");
             if (tables.contains("pictures"))
@@ -714,6 +717,7 @@ final class SearchIndex {
                         .replace("\\|", "|").replace("\\\\", "\\");
                 add(line, id, 2, section, value);
             }
+            RankedFields.index(db,id);
             inferRole(file,id,title);
             if (source.toString().toLowerCase(Locale.ROOT).endsWith(".pptx")) {
                 if (SlideSearch.installed(db)) SlideSearch.indexDocument(db,id);

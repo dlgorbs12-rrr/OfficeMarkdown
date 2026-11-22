@@ -58,7 +58,7 @@ final class ReferenceIndex {
     static void prepare() throws IOException {
         Path database = SearchIndex.database();
         if (!Files.isRegularFile(database)) return;
-        if (!SearchIndex.readIndex(db -> List.of(installed(db))).contains(true)) install(database);
+        if (!SearchIndex.readIndex(db -> List.of(table(db,"reference_context_terms"))).contains(true)) install(database);
         prepareLegacy(database);
     }
 
@@ -115,10 +115,35 @@ final class ReferenceIndex {
                         AND NOT EXISTS (SELECT 1 FROM evidence_version v WHERE v.doc=d.id)
                         """);
             }
+            if(installed(db) && !table(db,"reference_context_terms")){
+                sql.execute("CREATE VIRTUAL TABLE reference_context_terms USING fts5(heading,body,context,aliases,content='',contentless_delete=1,prefix='2 3')");
+                sql.execute("CREATE TRIGGER reference_context_delete AFTER DELETE ON reference_pages BEGIN DELETE FROM reference_context_terms WHERE rowid=old.id; END");
+                try(var docs=db.createStatement();var rows=docs.executeQuery("SELECT doc FROM reference_documents")){
+                    while(rows.next())indexContext(db,rows.getLong(1));
+                }
+            }
             // The schema and initial postings become visible together.
             sql.execute("COMMIT");
         } catch (SQLException failure) {
             throw new IOException("참고 장표 색인을 준비하지 못했습니다.", failure);
+        }
+    }
+
+    private static void indexContext(Connection db,long doc)throws SQLException{
+        try(var pages=db.prepareStatement("SELECT p.id,p.text,d.title FROM reference_pages p JOIN docs d ON p.doc=d.id WHERE p.doc=? ORDER BY p.number");
+            var insert=db.prepareStatement("INSERT INTO reference_context_terms(rowid,heading,body,context,aliases) VALUES(?,?,?,?,?)")){
+            pages.setLong(1,doc);
+            String divider="";
+            try(var rows=pages.executeQuery()){
+                while(rows.next()){
+                    String body=rows.getString(2);
+                    String heading=body.stripLeading().lines().findFirst().orElse("").strip();
+                    insert.setLong(1,rows.getLong(1));insert.setString(2,heading);
+                    insert.setString(3,body);insert.setString(4,rows.getString(3)+" "+divider);
+                    insert.setString(5,SlideSearch.aliases(heading));insert.executeUpdate();
+                    if(SlideSearch.isDivider(heading,body))divider=heading;
+                }
+            }
         }
     }
 
@@ -243,6 +268,7 @@ final class ReferenceIndex {
     }
 
     private static final class PageWriter implements AutoCloseable {
+        private final Connection db;
         private final PreparedStatement version;
         private final PreparedStatement lines;
         private final PreparedStatement pictures;
@@ -250,6 +276,7 @@ final class ReferenceIndex {
         private final PreparedStatement postings;
 
         PageWriter(Connection db) throws SQLException {
+            this.db=db;
             version = db.prepareStatement("""
                     INSERT INTO reference_documents(doc,hash,generation,note_stamp)
                     SELECT d.id,v.hash,v.generation,d.stamp FROM docs d JOIN evidence_version v ON v.doc=d.id
@@ -293,6 +320,7 @@ final class ReferenceIndex {
                 }
             }
             for (var entry : pages.entrySet()) save(doc, entry.getKey(), entry.getValue());
+            if(table(db,"reference_context_terms"))indexContext(db,doc);
         }
 
         void writeOriginal(long doc, Map<Integer, String> pages) throws SQLException {
@@ -301,6 +329,7 @@ final class ReferenceIndex {
                 entry.getValue().lines().forEach(text::add);
                 save(doc, entry.getKey(), text);
             }
+            if(table(db,"reference_context_terms"))indexContext(db,doc);
         }
 
         private void save(long doc, int number, PageText text) throws SQLException {
@@ -394,6 +423,10 @@ final class ReferenceIndex {
     }
 
     static SearchResult searchDetailed(String query, SearchIndex.Focus focus) throws IOException {
+        return searchDetailed(query,query,focus);
+    }
+
+    static SearchResult searchDetailed(String query,String original,SearchIndex.Focus focus) throws IOException {
         String match = match(query);
         var empty = new SearchResult(List.of(), false);
         if (match.isEmpty()) return empty;
@@ -406,6 +439,9 @@ final class ReferenceIndex {
                     match, focus, files));
             addRanks(scores, ranked(db, "reference_caption_terms", "bm25(reference_caption_terms)",
                     match, focus, files));
+            String contextual=SlideSearch.match(original,true);
+            if(!contextual.isEmpty() && table(db,"reference_context_terms"))
+                addRanks(scores,ranked(db,"reference_context_terms","bm25(reference_context_terms,6,1,0.35,2)",contextual,focus,files));
             var result = new ArrayList<Page>(LIMIT);
             try (var text = db.prepareStatement("SELECT text FROM reference_pages WHERE id=?")) {
                 for (var scored : scores.values().stream().sorted(ORDER).limit(LIMIT).toList()) {

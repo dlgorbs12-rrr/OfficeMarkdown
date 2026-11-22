@@ -51,6 +51,15 @@ class ReferenceIndexTest {
         assertTrue(ReferenceIndex.search("리망", new SearchIndex.Focus(folder.resolve("other.md"), null)).isEmpty());
     }
 
+    @Test void findsJoinedTitleAndRanksDeckContextWithLocalEvidence() throws Exception {
+        Path source=folder.resolve("ERP.pptx");
+        writeDeck(source,"ERP 회계","정산 구성도","재고 실사","휴가 안내");
+        converted(source);
+        ReferenceIndex.prepare();
+        assertEquals(3,ReferenceIndex.search("재고실사 장표",null).getFirst().number());
+        assertEquals(2,ReferenceIndex.search("ERP 구성도 장표",null).getFirst().number());
+    }
+
     @Test void oldLibraryUsesLiveOriginalInsteadOfUnverifiedMarkdown() throws Exception {
         Path source = folder.resolve("legacy.pptx");
         writeDeck(source, "원본장표판단", "승인 흐름");
