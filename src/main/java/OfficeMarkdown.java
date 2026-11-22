@@ -301,8 +301,9 @@ public final class OfficeMarkdown {
         });
         imageMode.addActionListener(e -> {
             views.show(searchViews,"local");
-            if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE) status.setText(searchStatus);
-            else scope.setSelectedItem(SearchIndex.Scope.IMAGE);
+            if (scope.getSelectedItem() != SearchIndex.Scope.IMAGE) scope.setSelectedItem(SearchIndex.Scope.IMAGE);
+            else if (lastSearch == null) refresh("");
+            else status.setText(searchStatus);
             updateReferenceContext();
             query.requestFocusInWindow();
         });
