@@ -343,7 +343,8 @@ final class AgentDialog extends JPanel {
         results.setRightComponent(detail);results.setDividerSize(8);results.setDividerLocation(0.52);revalidate();
         String heading="<html><body><h3>"+Entities.escape(hit.title())+"</h3><p>"
                 +Entities.escape(hit.source().toString())+"<br>"+Entities.escape(hit.section())+"</p>";
-        String evidence=heading+"<p>"+Entities.escape(hit.excerpt())+"</p>";
+        String excerpt=claim.page()!=null && !claim.evidence().isEmpty() ? claim.evidence().getFirst().quote() : hit.excerpt();
+        String evidence=heading+"<p>"+Entities.escape(excerpt)+"</p>";
         answer.setText(evidence+"</body></html>");answer.setCaretPosition(0);
         var loader=new SwingWorker<Detail,Void>() {
             protected Detail doInBackground() throws Exception {
