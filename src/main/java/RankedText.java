@@ -14,10 +14,14 @@ final class RankedText {
             .thenComparing(r->r.hit.title()).thenComparing(r->r.hit.md()).thenComparing(r->r.hit.section());
 
     static List<Library.Hit> search(Connection db,String query,SearchIndex.Scope scope,int limit)throws SQLException{
-        return search(db,query,scope,limit,"");
+        return search(db,query,scope,limit,"",false);
     }
 
-    static List<Library.Hit> search(Connection db,String query,SearchIndex.Scope scope,int limit,String sectionFilter)throws SQLException{
+    static List<Library.Hit> documents(Connection db,String query,int limit,String section)throws SQLException{
+        return search(db,query,SearchIndex.Scope.ALL,limit,section,true);
+    }
+
+    private static List<Library.Hit> search(Connection db,String query,SearchIndex.Scope scope,int limit,String sectionFilter,boolean byDocument)throws SQLException{
         var words=RelevanceSearch.words(query);
         if(words.isEmpty())return List.of();
         boolean fields=RankedFields.installed(db);
@@ -76,7 +80,7 @@ final class RankedText {
                     if(!Double.isFinite(score) || best!=null && score<=best.score)continue;
                     var hit=new Library.Hit(Path.of(r.getString(1)),Path.of(source),r.getString(3),section,scoring.excerpt,null,"","",List.of(),text);
                     String digest=kind==2?r.getString(9):null;
-                    Group key=new Group(digest==null?source:LatestVersionSelection.searchFamily(hit.source()),section,digest);
+                    Group key=byDocument?new Group(hit.md().toString(),"",null):new Group(digest==null?source:LatestVersionSelection.searchFamily(hit.source()),section,digest);
                     best=new Result(hit,score,key);
                 }
                 top.offer(best);

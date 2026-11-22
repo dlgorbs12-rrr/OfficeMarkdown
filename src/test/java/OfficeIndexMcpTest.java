@@ -49,6 +49,20 @@ class OfficeIndexMcpTest {
         server.call("read_evidence",json("{'document':'1','query':'연동항목'}"));
         assertTrue(Files.readString(root.resolve("E1")).contains("연동항목"));
     }
+    @Test void naturalSearchLimitsDocumentsAfterChoosingTheirBestSections() throws Exception {
+        StringBuilder body=new StringBuilder();
+        for(int i=0;i<14;i++)body.append("## Section "+i+"\nalpha bravo\n");
+        for(String name:List.of("multi","single")){
+            Files.writeString(root.resolve(name+".md"),"# "+name+"\n\n[원본 파일 열기](<"+root.resolve(name+".docx").toUri()+">)\n\n"+
+                    (name.equals("multi")?body:"## Heading\nalpha\n"));
+        }
+        SearchIndex.synchronize(root,p->{});
+        var server=OfficeIndexMcp.external(root);
+        var hits=server.call("search_documents",json("{'query':'alpha bravo'}"));
+        assertEquals(Set.of("multi","single"),hits.stream().map(r->((Map<?,?>)r).get("title")).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(2,hits.size());
+        assertThrows(IllegalArgumentException.class,()->server.call("search_documents",json("{'query':'alpha bravo','offset':12}")));
+    }
     @Test void externalReferenceIncludesOriginalSourceAcrossMultipleQuestions() throws Exception {
         var source=root.resolve("example.xlsx");
         Files.writeString(root.resolve("example.md"),"# IAM survey\n\n[원본 파일 열기](<"+source.toUri()+">)\n\n## Questions\n\nApproval owner");

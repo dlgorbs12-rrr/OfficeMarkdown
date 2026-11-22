@@ -49,14 +49,14 @@ public final class OfficeIndexMcp {
     private static Map<String,Object> tool(String name,String description,List<String> required,String... fields){
         var properties=new LinkedHashMap<String,Object>();
         for(String f:fields)properties.put(f,Map.of("type","string"));
-        properties.put("offset",Map.of("type","integer","minimum",0,"maximum",100000));
+        if(!name.equals("search_documents"))properties.put("offset",Map.of("type","integer","minimum",0,"maximum",100000));
         if(name.equals("search")){
             for(String key:List.of("required","optional"))properties.put(key,Map.of("type","array","items",Map.of("type","string"),"maxItems",5,"description","Additional title terms for filtering (required) or ranking (optional)."));
         }
         return Map.of("name",name,"description",description,"annotations",Map.of("readOnlyHint",true,"destructiveHint",false,"openWorldHint",false),"inputSchema",Map.of("type","object","properties",properties,"required",required,"additionalProperties",false));
     }
     private static final List<?> TOOLS=List.of(
-        tool("search_documents","Find document candidates using a natural-language request. Ranks titles, text and table fields, and recognizes named adapter design requests. Inspect candidates with list_sections and read_evidence.",List.of("query"),"query"),
+        tool("search_documents","Find up to 12 distinct document candidates using a natural-language request. Ranks titles, text and table fields, and recognizes named adapter design requests. Inspect candidates with list_sections and read_evidence.",List.of("query"),"query"),
         tool("search","Search one literal substring in field title, section, body or image. Returns candidate document handles and matching sample. Start with the requested deliverable name.",List.of("field","query"),"field","query"),
         tool("list_sections","Inspect up to 40 indexed headings in a candidate. Optional query filters heading names.",List.of("document"),"document","query"),
         tool("read_evidence","Read indexed section text or image OCR from a candidate. For reference-based drafting, cite the returned title, section and source_uri when present. Optional section is exact, query is a literal substring, field is body (default) or image. Returns citation IDs.",List.of("document"),"document","section","query","field")
@@ -96,6 +96,7 @@ public final class OfficeIndexMcp {
         return List.of(result);
     }
     private List<?> searchDocuments(JsonObject args) throws IOException {
+        if(args.has("offset"))throw new IllegalArgumentException("search_documents does not support offset");
         String question=string(args,"query").strip();
         if(question.isEmpty() || question.length()>1200)throw new IllegalArgumentException("질문은 1~1200자로 입력하세요.");
         var adapter=AdapterDiscovery.plan(question);
@@ -108,7 +109,7 @@ public final class OfficeIndexMcp {
         }else{
             hits=SearchIndex.readIndex(allowed,db->{
                 db.setAutoCommit(false);
-                return RankedText.search(db,question,SearchIndex.Scope.ALL,12,section);
+                return RankedText.documents(db,question,12,section);
             });
         }
         var result=new ArrayList<Object>();
