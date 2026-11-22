@@ -302,7 +302,7 @@ public final class OfficeMarkdown {
         imageMode.addActionListener(e -> {
             views.show(searchViews,"local");
             if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE) status.setText(searchStatus);
-            scope.setSelectedItem(SearchIndex.Scope.IMAGE);
+            else scope.setSelectedItem(SearchIndex.Scope.IMAGE);
             updateReferenceContext();
             query.requestFocusInWindow();
         });
@@ -1200,7 +1200,7 @@ public final class OfficeMarkdown {
             emptyButton.setText("전체 문서 보기");
             showHits(displayed, previous);
             searchStatus=summary + (displayed.isEmpty() ? " " : "그림을 선택하면 점검 이유가 표시됩니다. 후보 전체를 한 번에 정밀 OCR할 수 있습니다.");
-            status.setText(searchStatus);
+            status.setText(agentMode.isSelected() ? "Enter 보내기 · Shift+Enter 줄바꿈" : searchStatus);
             return;
         }
         boolean pictures = request.scope() == SearchIndex.Scope.IMAGE;
