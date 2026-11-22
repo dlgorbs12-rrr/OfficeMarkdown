@@ -1,0 +1,82 @@
+import java.nio.file.*;
+import java.util.*;
+import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import static org.junit.jupiter.api.Assertions.*;
+
+class SelectedSlidesTest {
+    @TempDir Path folder;
+    @Test void emptyFollowUpClearsTheActiveSelectionButEarlierReplyCanReopenIt() throws Exception {
+        var check=new java.util.concurrent.FutureTask<Void>(()->{
+            var chat=new AgentDialog(folder,hit->{},hit->{});
+            var display=AgentDialog.class.getDeclaredMethod("displayReply",javax.swing.JPanel.class,McpSearch.Reply.class,String.class,String.class,SearchIndex.Focus.class);
+            display.setAccessible(true);
+            var field=AgentDialog.class.getDeclaredField("foundTab");field.setAccessible(true);
+            var tab=(javax.swing.JPanel)field.get(chat);
+            var body=new javax.swing.JPanel();
+            var hit=new Library.Hit(folder.resolve("a.md"),folder.resolve("a.pptx"),"A","slide","a");
+            display.invoke(chat,body,new McpSearch.Reply("A",List.of(),List.of(hit),"A"),"A","",null);
+            var previous=(FoundDocuments)tab.getComponent(0);
+            var t=FoundDocuments.class.getDeclaredField("table");t.setAccessible(true);
+            var action=FoundDocuments.class.getDeclaredField("search");action.setAccessible(true);
+            ((javax.swing.JTable)t.get(previous)).setValueAt(true,0,0);
+            display.invoke(chat,new javax.swing.JPanel(),new McpSearch.Reply("B",List.of()),"B","A",null);
+            var current=tab.getComponent(0);
+            assertNotSame(previous,current);
+            assertEquals(0,((javax.swing.JTable)t.get(current)).getRowCount());
+            assertFalse(((javax.swing.JButton)action.get(current)).isEnabled());
+            ((javax.swing.JButton)body.getComponent(body.getComponentCount()-1)).doClick();
+            assertSame(previous,tab.getComponent(0));
+            assertTrue(((javax.swing.JButton)action.get(previous)).isEnabled());
+            return null;
+        });
+        javax.swing.SwingUtilities.invokeAndWait(check);
+        check.get();
+    }
+    @Test void manyMatchingSlidesInOneDeckLeaveRoomForOtherDecks() throws Exception {
+        var library=folder.resolve("notes");
+        var notes=new ArrayList<Path>();
+        for(String name:List.of("A","B")){
+            var source=folder.resolve(name+".pptx");
+            try(var deck=new XMLSlideShow();var out=Files.newOutputStream(source)){
+                for(int i=0;i<(name.equals("A")?24:1);i++)deck.createSlide().createTextBox().setText("architecture");
+                deck.write(out);
+            }
+            notes.add(Library.convert(source,library));
+        }
+        SearchIndex.indexCompleted(library,notes);
+        var reply=McpSearch.slideDocuments("architecture",null,null,prompt->"[]",status->{});
+        assertEquals(2,reply.candidates().size());
+    }
+    @Test void candidateDiscoveryThenOnlyCheckedDecksAreInspected() throws Exception {
+        var notes=new ArrayList<Path>();
+        var library=folder.resolve("notes");
+        for(String name:List.of("alpha","beta","excluded")){
+            Path source=folder.resolve(name+".pptx");
+            try(var deck=new XMLSlideShow();var out=Files.newOutputStream(source)){
+                deck.createSlide().createTextBox().setText("architecture "+name);
+                deck.write(out);
+            }
+            notes.add(Library.convert(source,library));
+        }
+        SearchIndex.indexCompleted(library,notes);
+        String request="architecture";
+        var found=McpSearch.slideDocuments(request,null,null,prompt->{
+            assertFalse(prompt.contains("후보당"));return "[]";
+        },status->{});
+        assertEquals(3,found.candidates().size());
+        assertTrue(found.sources().isEmpty());
+        var selected=notes.subList(0,2).stream().map(Path::toString).toList();
+        DocumentAgent.Ask judge=prompt->{
+            assertTrue(prompt.contains("질문: "+request));
+            assertTrue(prompt.contains("architecture alpha") && prompt.contains("architecture beta"));
+            assertFalse(prompt.contains("architecture excluded"));
+            return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"},{\"id\":2,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"}]";
+        };
+        var slides=McpSearch.selectedSlides(request,found.expanded(),null,selected,judge,status->{});
+        assertEquals(2,slides.sources().size());
+        assertTrue(slides.sources().stream().allMatch(c->selected.contains(c.proof().md().toString())));
+        assertThrows(java.io.IOException.class,()->McpSearch.selectedSlides(request,found.expanded(),null,List.of(),judge,status->{}));
+    }
+}

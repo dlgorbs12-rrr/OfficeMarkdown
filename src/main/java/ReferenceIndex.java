@@ -431,6 +431,12 @@ final class ReferenceIndex {
     }
 
     static SearchResult searchDetailed(String query,String original,SearchIndex.Focus focus,List<String> notes) throws IOException {
+        return searchDetailed(query,original,focus,notes,false);
+    }
+    static SearchResult candidateDocuments(String query,String original,SearchIndex.Focus focus,List<String> notes) throws IOException {
+        return searchDetailed(query,original,focus,notes,true);
+    }
+    private static SearchResult searchDetailed(String query,String original,SearchIndex.Focus focus,List<String> notes,boolean distinctDocs) throws IOException {
         String allowed=notes==null ? null : OfficeIndexMcp.JSON.toJson(notes);
         String match = match(query);
         var empty = new SearchResult(List.of(), false);
@@ -441,16 +447,19 @@ final class ReferenceIndex {
             var files = new LiveFiles();
             var scores = new HashMap<Key, Scored>();
             addRanks(scores, ranked(db, "reference_body_terms", "bm25(reference_body_terms,6.0,1.0)",
-                    match, focus, files, allowed));
+                    match, focus, files, allowed, distinctDocs));
             addRanks(scores, ranked(db, "reference_caption_terms", "bm25(reference_caption_terms)",
-                    match, focus, files, allowed));
+                    match, focus, files, allowed, distinctDocs));
             String contextual=SlideSearch.match(original,true);
             if(!contextual.isEmpty() && table(db,"reference_context_terms"))
-                addRanks(scores,ranked(db,"reference_context_terms","bm25(reference_context_terms,6,1,0.35,2)",contextual,focus,files,allowed));
+                addRanks(scores,ranked(db,"reference_context_terms","bm25(reference_context_terms,6,1,0.35,2)",contextual,focus,files,allowed,distinctDocs));
             var result = new ArrayList<Page>(LIMIT);
             try (var text = db.prepareStatement("SELECT text FROM reference_pages WHERE id=?")) {
-                for (var scored : scores.values().stream().sorted(ORDER).limit(LIMIT).toList()) {
-                    var rank = scored.ranked;
+                var seen=new HashSet<Path>();
+                var ordered=scores.values().stream().sorted(ORDER).iterator();
+                while(ordered.hasNext() && result.size()<LIMIT){
+                    var rank=ordered.next().ranked;
+                    if(distinctDocs && !seen.add(rank.indexed.note))continue;
                     text.setLong(1, rank.rowid);
                     try (var row = text.executeQuery()) {
                         if (row.next()) result.add(rank.indexed.page(row.getString(1)));
@@ -486,13 +495,14 @@ final class ReferenceIndex {
     }
 
     private static List<Ranked> ranked(Connection db, String table, String score, String match,
-                                       SearchIndex.Focus focus, LiveFiles files, String allowed) throws SQLException {
+                                       SearchIndex.Focus focus, LiveFiles files, String allowed, boolean distinctDocs) throws SQLException {
         String restrict = focus == null ? "" : " AND d.md=?" + (focus.section() == null ? "" : " AND p.section=?");
         String sql = "SELECT " + IDENTITY + ",p.id" + VISIBLE + " JOIN " + table + " ON " + table + ".rowid=p.id"
                 + " WHERE " + table + " MATCH ?" + restrict + membership(allowed)
                 + " ORDER BY " + score + ",d.source,p.number,v.hash,d.md";
         var best = new ArrayList<Ranked>(LIMIT);
         var seen = new HashSet<Key>();
+        var seenDocs = new HashSet<Path>();
         try (var q = db.prepareStatement(sql)) {
             q.setString(1, match);
             if (allowed != null) q.setString(focus == null ? 2 : focus.section() == null ? 3 : 4, allowed);
@@ -503,7 +513,8 @@ final class ReferenceIndex {
             try (var rows = q.executeQuery()) {
                 while (best.size() < LIMIT && !Thread.currentThread().isInterrupted() && rows.next()) {
                     var item = indexed(rows);
-                    if (!seen.contains(item.key()) && files.current(item)) {
+                    if ((!distinctDocs || !seenDocs.contains(item.note)) && !seen.contains(item.key()) && files.current(item)) {
+                        if(distinctDocs)seenDocs.add(item.note);
                         seen.add(item.key());
                         best.add(new Ranked(item, rows.getLong(9)));
                     }
