@@ -63,7 +63,9 @@ public final class OfficeIndexMcp {
             ReferenceIndex.prepare();
             SearchIndex.Focus scope=focus.isEmpty()?null:new SearchIndex.Focus(Path.of(focus),section.isBlank()?null:section);
             var rows=new ArrayList<Object>();
-            for(var page:ReferenceIndex.search(query,scope)){
+            var ranked=ReferenceIndex.searchDetailed(query,scope);
+            if(ranked.pages().isEmpty() && ranked.unavailable())throw new IOException("현재 범위의 장표 원본을 확인할 수 없습니다.");
+            for(var page:ranked.pages()){
                 String handle="P"+(++slideSerial);
                 slideHandles.put(handle,page);
                 rows.add(Map.of("page",handle,"title",page.hit().title(),"section",page.hit().section(),"number",page.number()));
@@ -72,6 +74,7 @@ public final class OfficeIndexMcp {
         }
         var page=slideHandles.get(string(args,"page"));
         if(page==null || !ReferenceIndex.current(page))throw new IllegalArgumentException("현재 범위에서 장표 원본을 확인할 수 없습니다.");
+        page=ReferenceOriginal.verified(page,new HashMap<>());
         var hit=page.hit();
         var id="E"+(++evidence);
         var row=new Row(hit.md().toString(),hit.source().toString(),hit.title(),hit.section(),ReferenceSearch.snippet(page.text()),"","");

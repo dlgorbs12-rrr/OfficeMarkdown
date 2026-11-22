@@ -44,13 +44,15 @@ final class ReferenceSearch {
             if(terms.size()==8)break;
         }
         if(Thread.interrupted())throw new InterruptedException();
-        var candidates=ReferenceIndex.search(question+" "+String.join(" ",terms),focus);
+        var ranked=ReferenceIndex.searchDetailed(question+" "+String.join(" ",terms),focus);
+        var candidates=ranked.pages();
         var inspected=new ArrayList<ReferenceIndex.Page>();
+        var originals=new HashMap<java.nio.file.Path,ReferenceOriginal.Content>();
         for(var page:candidates){
-            if(ReferenceIndex.current(page))inspected.add(page);
+            if(ReferenceIndex.current(page))inspected.add(ReferenceOriginal.verified(page, originals));
             if(inspected.size()==LIMIT)break;
         }
-        if(inspected.isEmpty() && !candidates.isEmpty())throw new IOException("후보 원본이 변경되었거나 열 수 없습니다. 다시 변환한 뒤 검색하세요.");
+        if(inspected.isEmpty() && (!candidates.isEmpty() || ranked.unavailable()))throw new IOException("후보 원본이 변경되었거나 열 수 없습니다. 다시 변환한 뒤 검색하세요.");
         if(inspected.isEmpty())return new Trace(candidates,List.of(),List.of());
         status.accept("상위 "+inspected.size()+"장의 원문을 함께 확인하는 중…");
         var input=new ArrayList<Map<String,Object>>();
