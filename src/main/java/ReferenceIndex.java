@@ -431,6 +431,12 @@ final class ReferenceIndex {
     }
 
     static SearchResult searchDetailed(String query,String original,SearchIndex.Focus focus,List<String> notes) throws IOException {
+        return searchDetailed(query,original,focus,notes,false);
+    }
+    static SearchResult candidateDocuments(String query,String original,SearchIndex.Focus focus,List<String> notes) throws IOException {
+        return searchDetailed(query,original,focus,notes,true);
+    }
+    private static SearchResult searchDetailed(String query,String original,SearchIndex.Focus focus,List<String> notes,boolean distinctDocs) throws IOException {
         String allowed=notes==null ? null : OfficeIndexMcp.JSON.toJson(notes);
         String match = match(query);
         var empty = new SearchResult(List.of(), false);
@@ -449,8 +455,11 @@ final class ReferenceIndex {
                 addRanks(scores,ranked(db,"reference_context_terms","bm25(reference_context_terms,6,1,0.35,2)",contextual,focus,files,allowed));
             var result = new ArrayList<Page>(LIMIT);
             try (var text = db.prepareStatement("SELECT text FROM reference_pages WHERE id=?")) {
-                for (var scored : scores.values().stream().sorted(ORDER).limit(LIMIT).toList()) {
-                    var rank = scored.ranked;
+                var seen=new HashSet<Path>();
+                var ordered=scores.values().stream().sorted(ORDER).iterator();
+                while(ordered.hasNext() && result.size()<LIMIT){
+                    var rank=ordered.next().ranked;
+                    if(distinctDocs && !seen.add(rank.indexed.note))continue;
                     text.setLong(1, rank.rowid);
                     try (var row = text.executeQuery()) {
                         if (row.next()) result.add(rank.indexed.page(row.getString(1)));

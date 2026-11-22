@@ -38,6 +38,11 @@ final class ReferenceSearch {
     }
 
     static Trace evaluate(String question,SearchIndex.Focus focus,DocumentAgent.Ask agent,Consumer<String> status,List<String> notes) throws Exception {
+        String expanded=expand(question,agent,status);
+        return inspect(question,ReferenceIndex.searchDetailed(expanded,question,focus,notes),agent,status);
+    }
+
+    static String expand(String question,DocumentAgent.Ask agent,Consumer<String> status) throws Exception {
         if(question==null || question.isBlank() || question.length()>1200) throw new IOException("질문을 1~1200자로 입력하세요.");
         status.accept("장표 색인 확인 중…");
         if(Thread.interrupted())throw new InterruptedException();
@@ -52,7 +57,10 @@ final class ReferenceSearch {
             if(terms.size()==8)break;
         }
         if(Thread.interrupted())throw new InterruptedException();
-        var ranked=ReferenceIndex.searchDetailed(question+" "+String.join(" ",terms),question,focus,notes);
+        return question+" "+String.join(" ",terms);
+    }
+
+    static Trace inspect(String question,ReferenceIndex.SearchResult ranked,DocumentAgent.Ask agent,Consumer<String> status) throws Exception {
         var candidates=ranked.pages();
         var inspected=new ArrayList<ReferenceIndex.Page>();
         var originals=new HashMap<java.nio.file.Path,ReferenceOriginal.Content>();

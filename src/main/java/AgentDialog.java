@@ -40,6 +40,9 @@ final class AgentDialog extends JPanel {
     private final java.util.IdentityHashMap<DocumentAgent.Claim,List<DocumentAgent.Claim>> answerGroups=new java.util.IdentityHashMap<>();
     private final JButton previous=new JButton("이전 출처"),next=new JButton("다음 출처");
     private final JComboBox<Integer> zoom=new JComboBox<>(new Integer[]{50,75,100,125,150,200});
+    private final JPanel foundTab=new JPanel(new BorderLayout());
+    private SwingWorker<McpSearch.Reply,String> slideTask;
+    private FoundDocuments searchingPanel;
     private JDialog previewWindow;
     private BufferedImage previewBitmap;
     private String previewHtml="";
@@ -76,6 +79,7 @@ final class AgentDialog extends JPanel {
         top.add(headerActions,BorderLayout.EAST);
         newChat.setEnabled(false);
         newChat.addActionListener(e->{
+            cancelSlideSearch();resetFound();
             conversation.removeAll();
             history.clear();
             documents.clear();answerGroups.clear();targets.select(List.of());previousScope=null;
@@ -161,10 +165,12 @@ final class AgentDialog extends JPanel {
         sidebar.setBorder(BorderFactory.createEmptyBorder(12,12,12,12));
         sidebar.setPreferredSize(new Dimension(360,320));
         sidebar.setMinimumSize(new Dimension(245,120));
-        documentTabs.addTab("검색 대상",targets);
+        documentTabs.addTab("대화에서 찾은 문서",foundTab);
+        resetFound();
         documentTabs.addTab("대화 출처",documents);
+        documentTabs.addTab("질문 범위",targets);
+        documentTabs.addChangeListener(e->{if(documentTabs.getSelectedComponent()==targets)targets.refresh();});
         sidebar.add(documentTabs);
-        targets.refresh();
 
         var chatColumn=LibraryStyle.panel(new BorderLayout(0,8),0);
         chatColumn.add(threadScroll);
@@ -256,7 +262,7 @@ final class AgentDialog extends JPanel {
         };
     }
 
-    void focusQuestion() { targets.refresh();question.requestFocusInWindow(); }
+    void focusQuestion() { question.requestFocusInWindow(); }
 
     private final JLabel welcome=LibraryStyle.label("에이전트와 어떤 작업을 할까요?",18,true,LibraryStyle.INK);
 
@@ -308,7 +314,40 @@ final class AgentDialog extends JPanel {
         conversation.revalidate();conversation.repaint();
     }
 
-    private void displayReply(JPanel body,McpSearch.Reply reply){
+    private void showFound(FoundDocuments panel){
+        foundTab.removeAll();foundTab.add(panel);foundTab.revalidate();foundTab.repaint();
+        documentTabs.setSelectedComponent(foundTab);
+    }
+    private void resetFound(){showFound(new FoundDocuments(List.of()));}
+    private void cancelSlideSearch(){
+        if(slideTask!=null){slideTask.cancel(true);slideTask=null;}
+        if(searchingPanel!=null){searchingPanel.busy(false);searchingPanel.setStatus("검색이 중단되었습니다.");searchingPanel=null;}
+    }
+    private void findSelectedSlides(FoundDocuments panel,String prompt,String expanded,SearchIndex.Focus focus,List<String> notes){
+        cancelSlideSearch();
+        var reader=ReferenceSearch.reader((DocumentAgent.Provider)providers.getSelectedItem(),modelId,reasoning,usage->{});
+        searchingPanel=panel;panel.busy(true);panel.setStatus("선택한 문서에서 장표 확인 중…");
+        slideTask=new SwingWorker<>(){
+            protected McpSearch.Reply doInBackground() throws Exception{
+                return McpSearch.selectedSlides(prompt,expanded,focus,notes,reader,this::publish);
+            }
+            protected void process(List<String> updates){if(slideTask==this)panel.setStatus(updates.getLast());}
+            protected void done(){
+                if(slideTask!=this)return;
+                try{
+                    var reply=get();var slides=reply.sources();
+                    if(slides.isEmpty()){panel.setStatus(reply.text());return;}
+                    for(var claim:slides)answerGroups.put(claim,slides);
+                    documents.append(slides);
+                    panel.setStatus("참고 슬라이드 "+slides.size()+"장을 찾았습니다.");
+                    showSelected(slides.getFirst());
+                }catch(Exception ex){panel.setStatus("슬라이드 검색 실패 · "+(ex.getCause()==null?ex:ex.getCause()).getMessage());}
+                finally{panel.busy(false);searchingPanel=null;slideTask=null;}
+            }
+        };slideTask.execute();
+    }
+
+    private void displayReply(JPanel body,McpSearch.Reply reply,String prompt,SearchIndex.Focus scope){
         var citations=new java.util.LinkedHashMap<String,DocumentAgent.Claim>();
         for(var source:reply.sources())citations.put(source.answer(),source);
         var message=new JEditorPane("text/html",MarkdownReader.chatHtml(reply.text(),citations.keySet())){
@@ -338,7 +377,15 @@ final class AgentDialog extends JPanel {
                 large.putClientProperty("html.disable",true);
                 large.addActionListener(e->showSelected(claim));body.add(large);
             }
-            documentTabs.setSelectedComponent(documents);
+        }
+        if(reply.candidates().isEmpty() && reply.expanded()!=null){
+            var empty=new FoundDocuments(List.of());empty.setStatus("이번 질문에서 찾은 PPTX 문서가 없습니다.");showFound(empty);
+        }
+        if(!reply.candidates().isEmpty()){
+            var panel=new FoundDocuments(reply.candidates());
+            panel.onSearch(notes->findSelectedSlides(panel,prompt,reply.expanded(),scope,notes));
+            var reopen=new JButton("이 답변에서 찾은 문서 보기");
+            reopen.addActionListener(e->showFound(panel));body.add(reopen);showFound(panel);
         }
     }
 
@@ -715,7 +762,7 @@ final class AgentDialog extends JPanel {
             protected void done(){
                 try{
                     var reply=get();
-                    displayReply(response,reply);
+                    displayReply(response,reply,text,scope);
                     String exchange="사용자: "+text+"\n에이전트: "+reply.text();
                     history.addLast(exchange.substring(0,Math.min(exchange.length(),4000)));
                     while(history.size()>4)history.removeFirst();
