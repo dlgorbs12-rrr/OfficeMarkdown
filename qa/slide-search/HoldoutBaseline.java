@@ -9,7 +9,8 @@ import java.util.regex.Pattern;
 class HoldoutBaseline {
     record Source(String alias, String path) {}
     record Page(String alias, int number) {}
-    record Response(List<Page> pages, double ms) {}
+    record Request(String query, boolean slides) {}
+    record Response(List<Page> pages, double ms, boolean slideRoute) {}
     public static void main(String[] args) throws Exception {
         var gson = new Gson();
         var sourceMap = new HashMap<Path,String>();
@@ -22,11 +23,15 @@ class HoldoutBaseline {
             Library.convert(path, library);
         }
         SearchIndex.synchronizeAll(library, ignored -> {});
+        boolean productB = args.length > 1 && args[1].equals("--product-b");
+        if (productB) SlideSearch.prepare(SearchIndex.database());
         var heading = Pattern.compile("슬라이드 ([0-9]+)");
         try (var input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
             System.out.println("READY");
             for (String line; (line = input.readLine()) != null;) {
-                String query = gson.fromJson(line, String.class);
+                var request = productB ? gson.fromJson(line, Request.class) : new Request(gson.fromJson(line, String.class),false);
+                String query = request.query();
+                System.setProperty(SlideSearch.ENABLED,Boolean.toString(request.slides()));
                 long start = System.nanoTime();
                 var hits = SearchIndex.searchCached(library,query,SearchIndex.Scope.ALL,SearchIndex.Mode.RELEVANCE,500);
                 var pages = new LinkedHashSet<Page>();
@@ -35,7 +40,8 @@ class HoldoutBaseline {
                     var match = heading.matcher(hit.section());
                     if (match.matches()) pages.add(new Page(alias,Integer.parseInt(match.group(1))));
                 }
-                var result = new Response(List.copyOf(pages),(System.nanoTime()-start)/1e6);
+                var result = new Response(List.copyOf(pages),(System.nanoTime()-start)/1e6,
+                        request.slides() && SlideSearch.requested(query));
                 System.out.println(gson.toJson(result));
             }
         }

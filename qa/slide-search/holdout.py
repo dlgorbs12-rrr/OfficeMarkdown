@@ -90,7 +90,7 @@ def labels(rows, tasks, documents):
     return gold
 
 
-def compare(frozen, out, java, classpath):
+def compare(frozen, out, java, classpath, product_b=False):
     documents = table(frozen / "documents.tsv")
     tasks = {row["task"]: row["query"] for row in table(frozen / "tasks.tsv")}
     sources = {d["source_id"]: d["local_path"] for d in documents}
@@ -110,9 +110,12 @@ def compare(frozen, out, java, classpath):
     db_path = data / "Index" / ".office-index-v1.sqlite"
     command = [java, "-Xmx2g", "-Dstdout.encoding=UTF-8", "-Dofficemd.dataDir=" + str(data),
                "-cp", classpath, "HoldoutBaseline", str(source_file)]
+    if product_b:
+        command.append("--product-b")
     predictions = {}
     samples = []
     promoted = {}
+    slide_routes = {}
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", bufsize=1) as engine:
         try:
@@ -125,12 +128,15 @@ def compare(frozen, out, java, classpath):
                 order = ("ABC", "BCA", "CAB", "CBA", "BAC", "ACB")
                 for i, (task, query) in enumerate(tasks.items()):
                     for mode in order[(i + run) % len(order)]:
-                        if mode == "A":
-                            engine.stdin.write(json.dumps(query) + "\n")
+                        if mode == "A" or product_b:
+                            request = {"query": query, "slides": mode != "A"} if product_b else query
+                            engine.stdin.write(json.dumps(request) + "\n")
                             engine.stdin.flush()
                             response = json.loads(engine.stdout.readline())
                             results = [(p["alias"], p["number"]) for p in response["pages"]]
                             ms = response["ms"]
+                            if mode != "A":
+                                slide_routes[task] = response["slideRoute"]
                         else:
                             start = perf_counter_ns()
                             with sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True) as db:
@@ -138,14 +144,16 @@ def compare(frozen, out, java, classpath):
                             db.close()
                             words = terms(query)
                             results = rank(pages, words, True)[:500]
-                            if mode == "C":
-                                scores = {key: boost(words, graph[key]) for key in results}
-                                results.sort(key=lambda key: -scores[key])
                             ms = (perf_counter_ns() - start) / 1e6
                             if pages.keys() != graph.keys():
                                 raise ValueError("Indexed pages differ from frozen slide order")
-                            if mode == "C":
-                                promoted[task] = [k for k, value in scores.items() if value]
+                        if mode == "C":
+                            start = perf_counter_ns()
+                            graph_words = terms(query) if product_b else words
+                            scores = {key: boost(graph_words, graph[key]) for key in results}
+                            results.sort(key=lambda key: -scores[key])
+                            ms += (perf_counter_ns() - start) / 1e6
+                            promoted[task] = [k for k, value in scores.items() if value]
                         old = predictions.setdefault(task, {}).setdefault(mode, results)
                         if old != results:
                             raise ValueError("Ranking changed between identical queries")
@@ -168,7 +176,7 @@ def compare(frozen, out, java, classpath):
                                relevant_retrieved=len(set(results) & gold[task]),
                                rank=next((i for i, page in enumerate(results, 1) if page in gold[task]), None),
                                p50_ms=times[math.ceil(.5 * len(times))-1], p95_ms=times[math.ceil(.95 * len(times))-1]))
-    report = dict(hashes=snapshot, graph_ms=graph_ms, pages_with_edges=sum(bool(e) for e in graph.values()),
+    report = dict(hashes=snapshot, product_b=product_b, slide_routes=slide_routes, graph_ms=graph_ms, pages_with_edges=sum(bool(e) for e in graph.values()),
                   edges=sum(map(len, graph.values())), promoted=promoted, scores=scores,
                   predictions=predictions, samples=samples)
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -180,5 +188,6 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("classpath")
     parser.add_argument("--java", default="java")
+    parser.add_argument("--product-b", action="store_true", help="Use the opt-in product B route instead of the development ranker")
     args = parser.parse_args()
-    compare(args.frozen, args.output.resolve(), args.java, args.classpath)
+    compare(args.frozen, args.output.resolve(), args.java, args.classpath, args.product_b)
