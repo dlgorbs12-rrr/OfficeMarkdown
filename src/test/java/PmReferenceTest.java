@@ -81,6 +81,8 @@ class PmReferenceTest {
         assertEquals(McpSearch.Route.CHAT,McpSearch.route("정책 설계서 참고 자료 찾아줘","",null));
         assertEquals(McpSearch.Route.CHAT,McpSearch.route("시스템 아키텍처 설계서를 찾아줘","",null));
         assertEquals(McpSearch.Route.CHAT,McpSearch.route("슬라이드를 PDF로 저장하는 방법을 알려줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("시스템 아키텍처를 설명한 문서 좀 찾아줘","",null));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("시스템 구성도가 있는 문서를 한 개 추천해줘","",null));
         assertEquals(McpSearch.Route.SLIDES,McpSearch.route("착수보고서에 쓸 시스템 구성도 잘된 거 찾아줘","",null));
         assertNull(AdapterDiscovery.plan("시스템 구성도 잘된 거 찾아줘"));
     }
