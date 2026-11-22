@@ -47,6 +47,7 @@ final class MarkdownReader {
             while ((line=in.readLine())!=null) {
                 fileLine++;
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException();
+                if (fileLine == 8 && EvidenceIndex.parseHeader(line) != null) continue;
                 if ((fileLine == 6 || fileLine == 7) && PictureAssets.generation(line) != null) continue;
                 if (line.startsWith("## ")) {
                     if (!chunk.isEmpty() && stop.test(new Page(section,part,chunk.toString()))) return;

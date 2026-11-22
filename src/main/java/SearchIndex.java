@@ -344,6 +344,7 @@ final class SearchIndex {
         sql.execute("CREATE TABLE IF NOT EXISTS large_allowed(md TEXT PRIMARY KEY)");
         sql.execute("CREATE TABLE IF NOT EXISTS large_pending(md TEXT PRIMARY KEY,size INTEGER NOT NULL)");
         sql.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, md TEXT UNIQUE, stamp TEXT, source TEXT, title TEXT)");
+        EvidenceIndex.schema(sql);
         sql.execute("CREATE TABLE IF NOT EXISTS document_roles(md TEXT PRIMARY KEY,inferred TEXT NOT NULL,manual TEXT)");
         sql.execute("CREATE INDEX IF NOT EXISTS doc_title ON docs(title,md)");
         sql.execute("CREATE TABLE IF NOT EXISTS lines(id INTEGER PRIMARY KEY, doc INTEGER REFERENCES docs ON DELETE CASCADE, kind INTEGER, section TEXT, text TEXT, folded TEXT)");
@@ -592,13 +593,14 @@ final class SearchIndex {
                 in.readLine();
                 Path source = original(in.readLine());
                 if (heading != null && heading.startsWith("# ") && source != null) {
-                    String generation = null, value;
+                    String generation = null, sourceHash = null, value;
                     while ((value = in.readLine()) != null && !value.startsWith("## ")) {
                         checkInterrupted();
                         if (generation == null) generation = PictureAssets.generation(value);
+                        if (sourceHash == null) sourceHash = EvidenceIndex.parseHeader(value);
                     }
                     String manifestStamp = PictureAssets.manifestStamp(file, generation);
-                    writeNote(file, stamp, source, heading.substring(2), generation, manifestStamp, in, value);
+                    writeNote(file, stamp, source, heading.substring(2), generation, manifestStamp, sourceHash, in, value);
                     outcome = manifestStamp.equals(PictureAssets.manifestStamp(file, generation))
                             ? Outcome.UPDATED : Outcome.SKIPPED;
                 }
@@ -614,7 +616,7 @@ final class SearchIndex {
         }
 
         private void writeNote(Path file, String stamp, Path source, String title, String generation,
-                               String manifestStamp, BufferedReader in, String value) throws SQLException, IOException {
+                               String manifestStamp, String sourceHash, BufferedReader in, String value) throws SQLException, IOException {
             doc.setString(1, file.toString());
             doc.setString(2, stamp + "\n" + Objects.toString(generation, "") + "\n" + manifestStamp);
             doc.setString(3, source.toString());
@@ -624,6 +626,7 @@ final class SearchIndex {
                 row.next();
                 id = row.getLong(1);
             }
+            EvidenceIndex.register(db,id,sourceHash,generation);
             add(line, id, 0, "제목", title);
             add(line, id, 1, "원본 경로", source.toString());
 
