@@ -69,7 +69,7 @@ final class McpSearch {
                 List.of(),docs,expanded);
     }
 
-    record DeckResult(String note,String outcome,List<DocumentAgent.Claim> slides){}
+    record DeckResult(String note,String outcome,List<DocumentAgent.Claim> slides,List<ReferenceIndex.Page> candidates){}
     record SlideResults(List<DeckResult> decks){
         List<DocumentAgent.Claim> sources(){return decks.stream().flatMap(deck->deck.slides().stream()).toList();}
     }
@@ -84,10 +84,12 @@ final class McpSearch {
             if(Thread.currentThread().isInterrupted())throw new InterruptedException();
             String progress="문서 "+(results.size()+1)+"/"+selected.size()+" · ";
             status.accept(progress+"후보 장표 확인 중…");
+            List<ReferenceIndex.Page> candidates=List.of();
             try{
                 var ranked=ReferenceIndex.searchDetailed(expanded,question,focus,List.of(note));
                 boolean sampled=ranked.pages().isEmpty();
                 if(sampled)ranked=ReferenceIndex.selectedDeckSample(note,focus,ReferenceSearch.LIMIT);
+                candidates=ranked.pages().stream().limit(ReferenceSearch.LIMIT).toList();
                 var trace=ReferenceSearch.inspect(question,ranked,agent,s->status.accept(progress+s));
                 var slides=new ArrayList<DocumentAgent.Claim>();
                 for(var item:trace.recommended()){
@@ -96,11 +98,11 @@ final class McpSearch {
                             List.of(new SearchIndex.Evidence(0,"","장표 원문",item.quote())),List.of(),item.reason(),page));
                 }
                 String inspected=(sampled?"앞쪽 장표 ":"후보 ")+trace.inspected().size()+"장 검토";
-                results.add(new DeckResult(note,inspected+" · 추천 "+slides.size()+"장",List.copyOf(slides)));
+                results.add(new DeckResult(note,inspected+" · 추천 "+slides.size()+"장",List.copyOf(slides),trace.inspected()));
             }catch(InterruptedException ex){throw ex;}
-            catch(IOException ex){
+            catch(Exception ex){
                 if(Thread.currentThread().isInterrupted())throw new InterruptedException();
-                results.add(new DeckResult(note,"확인 실패 · "+ex.getMessage(),List.of()));
+                results.add(new DeckResult(note,"확인 실패 · "+ex.getMessage(),List.of(),candidates));
             }
         }
         return new SlideResults(List.copyOf(results));

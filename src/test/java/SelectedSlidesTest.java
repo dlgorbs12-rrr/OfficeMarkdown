@@ -102,6 +102,8 @@ class SelectedSlidesTest {
         },status->{});
         assertEquals(selected,result.decks().stream().map(McpSearch.DeckResult::note).toList());
         assertTrue(result.decks().getFirst().outcome().contains("확인 실패"));
+        assertEquals(4,result.decks().getFirst().candidates().size());
+        assertTrue(result.decks().getFirst().slides().isEmpty());
         assertTrue(result.decks().getLast().outcome().contains("앞쪽 장표 1장 검토"));
         assertEquals(List.of(Path.of(selected.getLast())),result.sources().stream().map(c->c.proof().md()).toList());
     }

@@ -346,7 +346,7 @@ final class AgentDialog extends JPanel {
                 if(slideTask!=this)return;
                 try{
                     var reply=get();var slides=reply.sources();
-                    panel.showDeckResults(reply.decks(),thisClaim->showSelected(thisClaim));
+                    panel.showDeckResults(reply.decks(),AgentDialog.this::showSelected,AgentDialog.this::previewCandidates);
                     for(var claim:slides)answerGroups.put(claim,slides);
                     documents.append(slides);
                     panel.setStatus("선택한 PPTX "+reply.decks().size()+"개 · 추천 슬라이드 "+slides.size()+"장");
@@ -494,6 +494,16 @@ final class AgentDialog extends JPanel {
                 JOptionPane.showMessageDialog(AgentDialog.this,"현재 버전의 원본을 확인할 수 없습니다. 다시 검색하세요.");
             }
         }.execute();
+    }
+
+    private void previewCandidates(List<ReferenceIndex.Page> pages){
+        var candidates=pages.stream().map(page->{
+            var hit=page.hit();
+            var location=new Library.Hit(hit.md(),hit.source(),hit.title(),hit.section(),"");
+            return new DocumentAgent.Claim("원본 후보",location,List.of(),List.of(),"직접 확인할 후보 장표",page);
+        }).toList();
+        for(var item:candidates)answerGroups.put(item,candidates);
+        if(!candidates.isEmpty())showSelected(candidates.getFirst());
     }
 
     private void showSelected(DocumentAgent.Claim claim) {

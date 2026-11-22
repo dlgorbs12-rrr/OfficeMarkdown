@@ -53,12 +53,16 @@ final class FoundDocuments extends JPanel {
         updateAction();
     }
     private void clearDeckResults(){outcomes.removeAll();outcomes.revalidate();outcomes.repaint();}
-    void showDeckResults(List<McpSearch.DeckResult> decks,Consumer<DocumentAgent.Claim> open){
+    void showDeckResults(List<McpSearch.DeckResult> decks,Consumer<DocumentAgent.Claim> open,Consumer<List<ReferenceIndex.Page>> inspect){
         clearDeckResults();
         for(var deck:decks){
             var label=new JLabel();label.putClientProperty("html.disable",true);
             label.setText(choices.get(Path.of(deck.note())).getText()+" · "+deck.outcome());
             label.setToolTipText(label.getText());outcomes.add(label);
+            if(deck.slides().isEmpty() && !deck.candidates().isEmpty()){
+                var manual=new JButton("원본 후보 "+deck.candidates().size()+"장 직접 보기");
+                manual.addActionListener(event->inspect.accept(deck.candidates()));outcomes.add(manual);
+            }
             for(var slide:deck.slides()){
                 var button=new JButton(slide.proof().section()+" 열기");
                 button.addActionListener(event->open.accept(slide));outcomes.add(button);
