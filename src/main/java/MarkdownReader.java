@@ -30,15 +30,43 @@ final class MarkdownReader {
         return first[0];
     }
 
+    private static final class ExcerptLocator {
+        final String anchor;
+        final String[] context;
+        final ArrayDeque<String> recent=new ArrayDeque<>();
+        ExcerptLocator(Library.Hit hit,String sample){
+            anchor=sample;
+            String suffix=" … "+sample;
+            context=!hit.excerpt().equals(sample) && hit.excerpt().endsWith(suffix)
+                    ? hit.excerpt().substring(0,hit.excerpt().length()-suffix.length()).split(" … ") : new String[0];
+        }
+        boolean matches(Page page){
+            String readable=page.source().replace("<br>"," ").replace("&lt;","<").replace("&gt;",">")
+                    .replace("&amp;","&").replace("\\|","|").replace("\\\\","\\");
+            if(context.length==0)return readable.contains(anchor);
+            for(String line:readable.split("\\R")){
+                if(line.isBlank())continue;
+                if(line.contains(anchor)){
+                    int matched=0;
+                    for(String prior:recent){
+                        if(prior.contains(context[matched]) && ++matched==context.length)return true;
+                    }
+                }
+                recent.addLast(line);
+                if(recent.size()>5)recent.removeFirst();
+            }
+            return false;
+        }
+    }
+
     static Page previewPage(Path file, Library.Hit hit) throws IOException {
+        var locator=new ExcerptLocator(hit,hit.sourceExcerpt());
         class Selection {
             Page first, match;
             boolean accept(Page page) {
                 if (!page.section().equals(hit.section())) return false;
                 if (first==null) first=page;
-                String readable=page.source().replace("<br>"," ").replace("&lt;","<").replace("&gt;",">")
-                        .replace("&amp;","&").replace("\\|","|").replace("\\\\","\\");
-                if (!readable.contains(hit.sourceExcerpt())) return false;
+                if (!locator.matches(page)) return false;
                 match=page;
                 return true;
             }
@@ -92,14 +120,13 @@ final class MarkdownReader {
                 sample=evidence[1].replace("…","");
             }
         }
+        var locator=new ExcerptLocator(hit,sample);
         int first=-1;
         for(int i=0;i<pages.size();i++) {
             Page page=pages.get(i);
             if (!page.section().equals(section)) continue;
             if(first<0) first=i;
-            String readable=page.source().replace("<br>"," ").replace("&lt;","<").replace("&gt;",">")
-                    .replace("&amp;","&").replace("\\|","|").replace("\\\\","\\");
-            if(readable.contains(sample)) return i;
+            if(locator.matches(page)) return i;
         }
         return Math.max(0,first);
     }
