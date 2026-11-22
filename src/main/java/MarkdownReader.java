@@ -23,7 +23,7 @@ final class MarkdownReader {
         Page[] first={null};
         scan(file,page->{
             if (first[0]==null) first[0]=page;
-            if (page.section().equals("?? ??")) return false;
+            if (page.section().equals("문서 처음")) return false;
             first[0]=page;
             return true;
         });
