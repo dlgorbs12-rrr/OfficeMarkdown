@@ -584,6 +584,30 @@ final class ReferenceIndex {
         }
     }
 
+    static SearchResult selectedDeckSample(String note,SearchIndex.Focus focus,int limit) throws IOException {
+        if(focus!=null && !focus.md().toAbsolutePath().normalize().equals(Path.of(note).toAbsolutePath().normalize()))
+            return new SearchResult(List.of(),false);
+        var result=SearchIndex.readIndex(List.of(note),db->{
+            if(!installed(db))return List.of(new SearchResult(List.of(),true));
+            var pages=new ArrayList<Page>();var files=new LiveFiles();
+            String section=focus==null?null:focus.section();
+            try(var q=db.prepareStatement("SELECT "+IDENTITY+",p.text"+VISIBLE+" WHERE d.md=?"
+                    +(section==null?"":" AND p.section=?")+" ORDER BY p.number LIMIT ?")){
+                int bind=1;q.setString(bind++,note);
+                if(section!=null)q.setString(bind++,section);
+                q.setInt(bind,limit);
+                try(var rows=q.executeQuery()){
+                    while(rows.next()){
+                        var item=indexed(rows);
+                        if(files.current(item))pages.add(item.page(rows.getString(9)));
+                    }
+                }
+            }
+            return List.of(new SearchResult(List.copyOf(pages),files.unavailable || pages.isEmpty()));
+        });
+        return result.isEmpty()?new SearchResult(List.of(),true):result.getFirst();
+    }
+
     static List<Page> pages(Path source) throws IOException {
         return SearchIndex.readIndex(db -> {
             if (!installed(db)) return List.of();

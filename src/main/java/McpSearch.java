@@ -69,21 +69,43 @@ final class McpSearch {
                 List.of(),docs,expanded);
     }
 
-    static Reply selectedSlides(String question,String expanded,SearchIndex.Focus focus,List<String> notes,
+    record DeckResult(String note,String outcome,List<DocumentAgent.Claim> slides,List<ReferenceIndex.Page> candidates){}
+    record SlideResults(List<DeckResult> decks){
+        List<DocumentAgent.Claim> sources(){return decks.stream().flatMap(deck->deck.slides().stream()).toList();}
+    }
+    static SlideResults selectedSlides(String question,String expanded,SearchIndex.Focus focus,List<String> notes,
                                DocumentAgent.Ask agent,Consumer<String> status) throws Exception {
         if(notes==null || notes.isEmpty())throw new IOException("슬라이드를 찾을 PPTX 문서를 선택하세요.");
-        var trace=expanded==null?ReferenceSearch.evaluate(question,focus,agent,status,notes)
-                :ReferenceSearch.inspect(question,ReferenceIndex.searchDetailed(expanded,question,focus,notes),agent,status);
-        var recommendations=trace.recommended();
-        var claims=new ArrayList<DocumentAgent.Claim>();
-        var message=new StringBuilder();
-        for(var item:recommendations){
-            String id="E"+(claims.size()+1);
-            var page=item.page();
-            claims.add(new DocumentAgent.Claim(id,page.hit(),List.of(new SearchIndex.Evidence(0,"","장표 원문",item.quote())),List.of(),item.reason(),page));
-            message.append(item.reason()).append(" [").append(id).append("]\n\n");
+        if(expanded==null)expanded=ReferenceSearch.expand(question,agent,status);
+        var selected=new LinkedHashSet<>(notes);
+        var results=new ArrayList<DeckResult>();
+        int evidence=0;
+        for(String note:selected){
+            if(Thread.currentThread().isInterrupted())throw new InterruptedException();
+            String progress="문서 "+(results.size()+1)+"/"+selected.size()+" · ";
+            status.accept(progress+"후보 장표 확인 중…");
+            List<ReferenceIndex.Page> candidates=List.of();
+            try{
+                var ranked=ReferenceIndex.searchDetailed(expanded,question,focus,List.of(note));
+                boolean sampled=ranked.pages().isEmpty();
+                if(sampled)ranked=ReferenceIndex.selectedDeckSample(note,focus,ReferenceSearch.LIMIT);
+                candidates=ranked.pages().stream().limit(ReferenceSearch.LIMIT).toList();
+                var trace=ReferenceSearch.inspect(question,ranked,agent,s->status.accept(progress+s));
+                var slides=new ArrayList<DocumentAgent.Claim>();
+                for(var item:trace.recommended()){
+                    var page=item.page();
+                    slides.add(new DocumentAgent.Claim("E"+(++evidence),page.hit(),
+                            List.of(new SearchIndex.Evidence(0,"","장표 원문",item.quote())),List.of(),item.reason(),page));
+                }
+                String inspected=(sampled?"앞쪽 장표 ":"후보 ")+trace.inspected().size()+"장 검토";
+                results.add(new DeckResult(note,inspected+" · 추천 "+slides.size()+"장",List.copyOf(slides),trace.inspected()));
+            }catch(InterruptedException | java.util.concurrent.CancellationException ex){throw ex;}
+            catch(Exception ex){
+                if(Thread.currentThread().isInterrupted())throw new InterruptedException();
+                results.add(new DeckResult(note,"확인 실패 · "+ex.getMessage(),List.of(),candidates));
+            }
         }
-        return new Reply(claims.isEmpty()?"현재 검색 범위의 후보에서 직접 참고할 장표를 확인하지 못했습니다.":message.toString().strip(),List.copyOf(claims));
+        return new SlideResults(List.copyOf(results));
     }
 
     enum Route { ADAPTER, SLIDES, CHAT }

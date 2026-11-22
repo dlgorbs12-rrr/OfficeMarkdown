@@ -11,17 +11,25 @@ class SelectedSlidesTest {
         var check=new java.util.concurrent.FutureTask<Void>(()->{
             var a=new Library.Hit(folder.resolve("a.md"),folder.resolve("a.pptx"),"A","","");
             var b=new Library.Hit(folder.resolve("b.md"),folder.resolve("b.PPTX"),"B","","");
-            var x=new Library.Hit(folder.resolve("c.md"),folder.resolve("c.xlsx"),"C","","");
+            var x=new Library.Hit(folder.resolve("c.md"),folder.resolve("c.docx"),"C","","");
             var panel=new FoundDocuments(List.of(a,b,a,x));
             var choices=FoundDocuments.class.getDeclaredField("choices");choices.setAccessible(true);
             var controls=(Map<?,?>)choices.get(panel);
-            assertEquals(Set.of(a.md(),b.md()),controls.keySet());
+            assertEquals(Set.of(a.md(),b.md(),x.md()),controls.keySet());
             var first=(javax.swing.JCheckBox)controls.get(a.md());
             var second=(javax.swing.JCheckBox)controls.get(b.md());
             var action=FoundDocuments.class.getDeclaredField("search");action.setAccessible(true);
             var button=(javax.swing.JButton)action.get(panel);
             var requests=new ArrayList<List<String>>();panel.onSearch(requests::add);
+            var scope=FoundDocuments.class.getDeclaredField("ask");scope.setAccessible(true);
+            var scopeButton=(javax.swing.JButton)scope.get(panel);
+            var scopes=new ArrayList<List<String>>();panel.onScope(scopes::add);
+            ((javax.swing.JCheckBox)controls.get(x.md())).doClick();scopeButton.doClick();
+            assertEquals(List.of(List.of(x.md().toString())),scopes);
+            assertFalse(button.isEnabled());
             first.doClick();second.doClick();
+            scopeButton.doClick();
+            assertEquals(List.of(x.md().toString(),a.md().toString(),b.md().toString()),scopes.getLast());
             assertTrue(requests.isEmpty());
             panel.busy(true);assertFalse(first.isEnabled());assertFalse(button.isEnabled());
             panel.busy(false);button.doClick();first.doClick();button.doClick();second.doClick();
@@ -74,6 +82,31 @@ class SelectedSlidesTest {
         var reply=McpSearch.slideDocuments("architecture",null,null,prompt->"[]",status->{});
         assertEquals(2,reply.candidates().size());
     }
+    @Test void selectedDecksEachReceiveAReviewAndOneFailureDoesNotHideAnother() throws Exception {
+        var library=folder.resolve("notes");
+        var selected=new ArrayList<String>();
+        for(String name:List.of("crowded","diagram")){
+            Path source=folder.resolve(name+".pptx");
+            try(var deck=new XMLSlideShow();var out=Files.newOutputStream(source)){
+                for(int i=0;i<(name.equals("crowded")?8:1);i++)
+                    deck.createSlide().createTextBox().setText(name.equals("crowded")?"architecture":"diagram source");
+                deck.write(out);
+            }
+            var md=Library.convert(source,library);selected.add(md.toString());
+        }
+        SearchIndex.indexCompleted(library,selected.stream().map(Path::of).toList());
+        ReferenceIndex.prepare();
+        var result=McpSearch.selectedSlides("architecture","architecture",null,selected,prompt->{
+            if(prompt.contains("architecture") && !prompt.contains("diagram source"))throw new IllegalStateException("fixture unavailable");
+            return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"diagram\",\"quote\":\"diagram source\"}]";
+        },status->{});
+        assertEquals(selected,result.decks().stream().map(McpSearch.DeckResult::note).toList());
+        assertTrue(result.decks().getFirst().outcome().contains("확인 실패"));
+        assertEquals(4,result.decks().getFirst().candidates().size());
+        assertTrue(result.decks().getFirst().slides().isEmpty());
+        assertTrue(result.decks().getLast().outcome().contains("앞쪽 장표 1장 검토"));
+        assertEquals(List.of(Path.of(selected.getLast())),result.sources().stream().map(c->c.proof().md()).toList());
+    }
     @Test void candidateDiscoveryThenOnlyCheckedDecksAreInspected() throws Exception {
         var notes=new ArrayList<Path>();
         var library=folder.resolve("notes");
@@ -95,9 +128,9 @@ class SelectedSlidesTest {
         var selected=notes.subList(0,2).stream().map(Path::toString).toList();
         DocumentAgent.Ask judge=prompt->{
             assertTrue(prompt.contains("질문: "+request));
-            assertTrue(prompt.contains("architecture alpha") && prompt.contains("architecture beta"));
+            assertNotEquals(prompt.contains("architecture alpha"),prompt.contains("architecture beta"));
             assertFalse(prompt.contains("architecture excluded"));
-            return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"},{\"id\":2,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"}]";
+            return "[{\"id\":1,\"grade\":\"yes\",\"reason\":\"구성\",\"quote\":\"architecture\"}]";
         };
         var slides=McpSearch.selectedSlides(request,found.expanded(),null,selected,judge,status->{});
         assertEquals(2,slides.sources().size());
