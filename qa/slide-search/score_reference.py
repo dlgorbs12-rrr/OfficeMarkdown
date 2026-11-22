@@ -52,7 +52,28 @@ def score(traces, documents, gold):
     return scores
 
 
-def run(exe, frozen, output, data):
+def comparison(baseline, frozen, selected, gold, traces, documents):
+    report = json.loads(baseline.read_text(encoding="utf-8"))
+    hashes = report["hashes"]
+    for name in ("tasks.tsv", "판정표.tsv", "documents.tsv"):
+        if digest(frozen / name) != hashes.get(name):
+            raise ValueError("Baseline differs from the frozen evaluation inputs")
+    result = {}
+    for mode in ("A", "B"):
+        rows = {r["task"]: r for r in report["scores"] if r["mode"] == mode}
+        if not set(selected).issubset(rows):
+            raise ValueError("Incomplete baseline tasks")
+        positive = [t for t in selected if gold[t]]
+        hits = {t for t in positive if rows[t]["rank"] is not None and 1 <= rows[t]["rank"] <= 3}
+        new_hits = {t for t in positive if traces[t]["status"] == "ok"
+                    and gold[t].intersection(validate(traces[t], documents)[2])}
+        result[mode] = dict(baseline_hit3=len(hits), pilot_hit3=len(new_hits),
+                            gained=sorted(new_hits - hits), lost=sorted(hits - new_hits),
+                            delta_percentage_points=100*(len(new_hits)-len(hits))/len(positive) if positive else None)
+    return result
+
+
+def run(exe, frozen, output, data, baseline=None):
     documents = table(frozen / "documents.tsv")
     tasks = {r["task"]: r["query"] for r in table(frozen / "tasks.tsv")}
     if any(digest(Path(d["local_path"])) != d["sha256"] for d in documents):
@@ -80,6 +101,8 @@ def run(exe, frozen, output, data):
     selected = {t: traces[t] for t in tasks if t not in excluded}
     result = dict(scores=score(selected, documents, {t: gold[t] for t in selected}),
                   excluded=sorted(excluded), traces=traces)
+    if baseline is not None:
+        result["comparison"] = comparison(baseline, frozen, selected, gold, traces, documents)
     with output.open("x", encoding="utf-8") as stream:
         json.dump(result, stream, ensure_ascii=False, indent=2)
 
@@ -88,5 +111,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ("exe", "frozen", "output", "data"):
         parser.add_argument(key, type=Path)
+    parser.add_argument("--baseline", type=Path, help="A/B baseline report for the same frozen inputs")
     args = parser.parse_args()
-    run(args.exe, args.frozen, args.output, args.data)
+    run(args.exe, args.frozen, args.output, args.data, args.baseline)
