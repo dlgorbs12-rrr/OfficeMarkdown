@@ -47,6 +47,7 @@ final class AgentDialog extends JPanel {
         public String toString(){return claim.proof().title()+" · "+claim.proof().section();}
     }
     private final JComboBox<PreviewChoice> previewChoices=new JComboBox<>();
+    private List<DocumentAgent.Claim> manualPreviews=List.of();
     private JDialog previewWindow;
     private BufferedImage previewBitmap;
     private String previewHtml="";
@@ -86,7 +87,7 @@ final class AgentDialog extends JPanel {
             cancelSlideSearch();resetFound();
             conversation.removeAll();
             history.clear();
-            documents.clear();answerGroups.clear();targets.select(List.of());previousScope=null;
+            documents.clear();answerGroups.clear();manualPreviews=List.of();targets.select(List.of());previousScope=null;
             hidePreview();
             scopes.setSelectedItem(ALL);
             updateScopes(null);
@@ -502,6 +503,7 @@ final class AgentDialog extends JPanel {
             var location=new Library.Hit(hit.md(),hit.source(),hit.title(),hit.section(),"");
             return new DocumentAgent.Claim("원본 후보",location,List.of(),List.of(),"직접 확인할 후보 장표",page);
         }).toList();
+        manualPreviews.forEach(answerGroups::remove);manualPreviews=candidates;
         for(var item:candidates)answerGroups.put(item,candidates);
         if(!candidates.isEmpty())showSelected(candidates.getFirst());
     }
