@@ -7,6 +7,7 @@ import javax.swing.*;
 
 /** A reply owns its controls and selection so earlier questions can be revisited. */
 final class FoundDocuments extends JPanel {
+    private static final String SELECTION_HINT="슬라이드 검색에는 선택한 PPTX만 사용합니다.";
     private final Set<Path> checked=new LinkedHashSet<>();
     private final Map<Path,JCheckBox> choices=new LinkedHashMap<>();
     private final Set<Path> presentations=new HashSet<>();
@@ -33,7 +34,7 @@ final class FoundDocuments extends JPanel {
             box.setToolTipText(hit.source().toString());
             box.addItemListener(e->{
                 if(box.isSelected())checked.add(hit.md());else checked.remove(hit.md());
-                clearDeckResults();updateAction();
+                clearDeckResults();setStatus(SELECTION_HINT);updateAction();
             });
             choices.put(hit.md(),box);
             box.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -47,7 +48,7 @@ final class FoundDocuments extends JPanel {
         footer.add(status,BorderLayout.NORTH);var actions=new JPanel(new java.awt.GridLayout(0,1,0,3));
         actions.add(ask);actions.add(search);footer.add(actions,BorderLayout.SOUTH);
         add(new JScrollPane(content));add(footer,BorderLayout.SOUTH);
-        status.setText(choices.isEmpty()?"질문을 보내면 찾은 문서가 표시됩니다.":"슬라이드 검색에는 선택한 PPTX만 사용합니다.");
+        status.setText(choices.isEmpty()?"질문을 보내면 찾은 문서가 표시됩니다.":SELECTION_HINT);
         ask.addActionListener(e->useScope.accept(checked.stream().map(Path::toString).toList()));
         search.addActionListener(e->submit.accept(checked.stream().filter(presentations::contains).map(Path::toString).toList()));
         updateAction();
