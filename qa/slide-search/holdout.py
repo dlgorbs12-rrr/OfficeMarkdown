@@ -14,6 +14,7 @@ from time import perf_counter_ns
 from xml.etree import ElementTree as ET
 
 from development import rank, read_pages, terms
+from wiki_candidates import WikiCandidates
 
 
 def table(path):
@@ -119,10 +120,24 @@ def graded_labels(rows, tasks, docs):
 
 
 
-def compare(frozen, out, java, classpath, product_b=False):
+def frozen_sources(documents):
+    sources, paths, versions = {}, set(), set()
+    for row in documents:
+        alias, path, version = row["source_id"], Path(row["local_path"]).resolve(), row["sha256"].lower()
+        if alias in sources or path in paths or version in versions:
+            raise ValueError("Duplicate frozen source, path or content version")
+        sources[alias] = row["local_path"]
+        paths.add(path)
+        versions.add(version)
+    return sources
+
+
+def compare(frozen, out, java, classpath, product_b=False, wiki=False):
+    if wiki and not product_b:
+        raise ValueError("Wiki expansion requires the product B comparator")
     documents = table(frozen / "documents.tsv")
     tasks = {row["task"]: row["query"] for row in table(frozen / "tasks.tsv")}
-    sources = {d["source_id"]: d["local_path"] for d in documents}
+    sources = frozen_sources(documents)
     def verify():
         for doc in documents:
             if digest(Path(doc["local_path"])) != doc["sha256"]:
@@ -153,8 +168,18 @@ def compare(frozen, out, java, classpath, product_b=False):
                     break
             else:
                 raise RuntimeError("A engine failed during index preparation")
+            if wiki:
+                start = perf_counter_ns()
+                with sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True) as db:
+                    db.execute("BEGIN")
+                    index = WikiCandidates(read_pages(db, sources), graph)
+                db.close()
+                wiki_ms = (perf_counter_ns() - start) / 1e6
+                topic_only, endpoints, reasons, audits = {}, {}, {}, {}
             for run in range(21):
                 order = ("ABC", "BCA", "CAB", "CBA", "BAC", "ACB")
+                if wiki:
+                    order = ("ABCG", "BCGA", "CGAB", "GABC", "GCBA", "CBAG", "BAGC", "AGCB")
                 for i, (task, query) in enumerate(tasks.items()):
                     for mode in order[(i + run) % len(order)]:
                         if mode == "A" or product_b:
@@ -183,6 +208,17 @@ def compare(frozen, out, java, classpath, product_b=False):
                             results.sort(key=lambda key: -scores[key])
                             ms += (perf_counter_ns() - start) / 1e6
                             promoted[task] = [k for k, value in scores.items() if value]
+                        if mode == "G":
+                            start = perf_counter_ns()
+                            baseline = results
+                            results, evidence = index.search(query, baseline)
+                            ms += (perf_counter_ns() - start) / 1e6
+                            if run == 0:
+                                audits[task] = {}
+                                index.search(query, baseline, audit=audits[task])
+                                topic_only[task], _ = index.search(query, baseline, mode="T")
+                                endpoints[task], _ = index.search(query, baseline, mode="E")
+                            reasons[task] = evidence
                         old = predictions.setdefault(task, {}).setdefault(mode, results)
                         if old != results:
                             raise ValueError("Ranking changed between identical queries")
@@ -214,6 +250,20 @@ def compare(frozen, out, java, classpath, product_b=False):
     report = dict(hashes=snapshot, product_b=product_b, slide_routes=slide_routes, graph_ms=graph_ms, pages_with_edges=sum(bool(e) for e in graph.values()),
                   edges=sum(map(len, graph.values())), promoted=promoted, scores=scores,
                   predictions=predictions, samples=samples)
+    if wiki:
+        for variants in predictions.values():
+            if variants["G"][:len(variants["B"])] != variants["B"]:
+                raise ValueError("G displaced existing B candidates")
+        wiki_scores = {}
+        for task, topic_pages in topic_only.items():
+            graph_pages = predictions[task]["G"]
+            graph_only = set(graph_pages) - set(endpoints[task])
+            wiki_scores[task] = dict(
+                topic_candidates=len(topic_pages), graph_only_candidates=len(graph_only),
+                graph_only_relevant=len(graph_only & gold[task]) if task not in excluded else None,
+                topic_top3=bool(set(topic_pages[:3]) & gold[task]) if task not in excluded else None)
+        report.update(merge_audit=audits, topic_only=topic_only, endpoint_control=endpoints, expansion_evidence=reasons, wiki_prepare_ms=wiki_ms,
+                      wiki_scores=wiki_scores)
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
 
@@ -224,5 +274,6 @@ if __name__ == "__main__":
     parser.add_argument("classpath")
     parser.add_argument("--java", default="java")
     parser.add_argument("--product-b", action="store_true", help="Use the opt-in product B route instead of the development ranker")
+    parser.add_argument("--wiki", action="store_true", help="Measure one-hop candidate expansion G")
     args = parser.parse_args()
-    compare(args.frozen, args.output.resolve(), args.java, args.classpath, args.product_b)
+    compare(args.frozen, args.output.resolve(), args.java, args.classpath, args.product_b, args.wiki)
