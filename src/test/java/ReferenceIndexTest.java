@@ -58,6 +58,13 @@ class ReferenceIndexTest {
         String old = "# Old\n\n[원본 파일 열기](<" + source.toUri() + ">)\n\n## 슬라이드 9\n이전 문구\n";
         Files.writeString(note, old);
         SearchIndex.indexCompleted(folder, List.of(note));
+        try (var db = DriverManager.getConnection("jdbc:sqlite:" + SearchIndex.database());
+             var sql = db.createStatement()) {
+            sql.execute("DROP TABLE evidence_edge");
+            sql.execute("DROP TABLE evidence_version");
+            sql.execute("DROP TABLE large_pending");
+            sql.execute("DROP TABLE pictures");
+        }
         ReferenceIndex.prepare();
         assertEquals(old, Files.readString(note));
         var hit = ReferenceIndex.search("장표판단", null).getFirst();
@@ -102,6 +109,7 @@ class ReferenceIndexTest {
 
         hide(note, true);
         assertTrue(ReferenceIndex.search("오래된해설", null).isEmpty());
+        assertFalse(ReferenceIndex.searchDetailed("오래된해설", null).unavailable());
         assertFalse(ReferenceIndex.current(old));
         assertFalse(ReferenceIndex.storeDescriptions(source, old.sha256(), Map.of(1, "숨김")));
         assertTrue(ReferenceIndex.pendingSources().isEmpty());
@@ -113,7 +121,10 @@ class ReferenceIndexTest {
         bytes[bytes.length - 1] ^= 1;
         Files.write(source, bytes);
         Files.setLastModifiedTime(source, attributes);
-        assertTrue(ReferenceIndex.search("변경전", null).isEmpty());
+        var inaccessible = ReferenceIndex.searchDetailed("변경전", null);
+        assertTrue(inaccessible.pages().isEmpty());
+        assertTrue(inaccessible.unavailable());
+        assertFalse(ReferenceIndex.searchDetailed("존재하지않는검색어", null).unavailable());
         assertTrue(ReferenceIndex.search("오래된해설", null).isEmpty());
         assertFalse(ReferenceIndex.current(old));
         assertFalse(ReferenceIndex.storeDescriptions(source, old.sha256(), Map.of(1, "잘못된 해설")));
@@ -151,6 +162,22 @@ class ReferenceIndexTest {
         assertEquals(expected, numbers(focused));
         assertTrue(focused.stream().allMatch(page -> page.hit().source().equals(b)));
         assertEquals(24, ReferenceIndex.pages(a).size());
+    }
+
+    @Test void candidatesContinuePastDenseDuplicateCopies() throws Exception {
+        Path a = folder.resolve("a.pptx");
+        Path b = folder.resolve("b.pptx");
+        writeDeck(a, "통합검색");
+        writeDeck(b, "통합검색");
+        Path note = converted(a);
+        converted(b);
+        Path copies = Files.createDirectory(folder.resolve("copies"));
+        var paths = new ArrayList<Path>();
+        for (int i = 0; i < 100; i++) paths.add(Files.copy(note, copies.resolve(i + ".md")));
+        SearchIndex.indexCompleted(copies, paths);
+        ReferenceIndex.prepare();
+        assertEquals(List.of(a, b), ReferenceIndex.search("통합검색", null).stream()
+                .map(page -> page.hit().source()).toList());
     }
 
     private static void hide(Path note, boolean hidden) throws Exception {

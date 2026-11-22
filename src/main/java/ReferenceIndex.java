@@ -20,6 +20,7 @@ final class ReferenceIndex {
     private static final Object LEGACY_PREPARATION = new Object();
 
     record Page(Library.Hit hit, int number, String version, String text, String sha256) {}
+    record SearchResult(List<Page> pages, boolean unavailable) {}
     private record Key(Path source, int number, String hash) {}
     private record Indexed(Path note, Path source, String title, String section, int number,
                            String hash, String generation, String stamp) {
@@ -50,6 +51,10 @@ final class ReferenceIndex {
         }
     }
 
+    private static String visibleDocuments(Connection db) throws SQLException {
+        return "(SELECT d.* FROM docs d" + SearchIndex.visibilityPredicate(table(db, "large_pending")) + ")";
+    }
+
     static void prepare() throws IOException {
         Path database = SearchIndex.database();
         if (!Files.isRegularFile(database)) return;
@@ -60,7 +65,8 @@ final class ReferenceIndex {
     private static void install(Path database) throws IOException {
         try (var db = writer(database); var sql = db.createStatement()) {
             sql.execute("BEGIN IMMEDIATE");
-            if (!installed(db) && table(db, "evidence_version")) {
+            if (!installed(db) && table(db, "docs")) {
+                EvidenceIndex.schema(sql);
                 sql.execute("CREATE INDEX IF NOT EXISTS reference_docs_source ON docs(source)");
                 sql.execute("""
                         CREATE TABLE reference_documents (
@@ -178,7 +184,7 @@ final class ReferenceIndex {
                 try {
                     generation = PictureAssets.currentGeneration(source.note);
                     stamp = SearchIndex.noteStamp(source.note, generation);
-                    if (stamp == null) continue;
+                    if (stamp == null) throw new IOException("변환 문서를 읽을 수 없습니다.");
                     content = ReferenceOriginal.read(source.source);
                 } catch (IOException | RuntimeException error) {
                     if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("장표 색인 준비를 중단했습니다.");
@@ -215,9 +221,8 @@ final class ReferenceIndex {
             sql.execute("BEGIN IMMEDIATE");
             try (var q = db.prepareStatement("""
                     DELETE FROM reference_legacy_queue WHERE doc=? AND EXISTS (
-                        SELECT 1 FROM docs d WHERE d.id=doc AND d.md=? AND d.source=? AND d.stamp IS ?
-                        AND NOT EXISTS (SELECT 1 FROM large_pending p WHERE p.md=d.md))
-                    """)) {
+                        SELECT 1 FROM %s d WHERE d.id=doc AND d.md=? AND d.source=? AND d.stamp IS ?)
+                    """.formatted(visibleDocuments(db)))) {
                 bindLegacy(q, source);
                 if (q.executeUpdate() != 1) return;
             }
@@ -238,27 +243,28 @@ final class ReferenceIndex {
     }
 
     private static final class PageWriter implements AutoCloseable {
+        private final PreparedStatement version;
         private final PreparedStatement lines;
         private final PreparedStatement pictures;
         private final PreparedStatement page;
         private final PreparedStatement postings;
 
         PageWriter(Connection db) throws SQLException {
+            version = db.prepareStatement("""
+                    INSERT INTO reference_documents(doc,hash,generation,note_stamp)
+                    SELECT d.id,v.hash,v.generation,d.stamp FROM docs d JOIN evidence_version v ON v.doc=d.id
+                    WHERE d.id=?
+                    """);
             lines = db.prepareStatement("SELECT section,text FROM lines WHERE doc=? AND kind=2 ORDER BY id");
-            pictures = db.prepareStatement("SELECT section,text FROM pictures WHERE doc=? AND text<>'' ORDER BY id");
+            pictures = table(db, "pictures") ?
+                    db.prepareStatement("SELECT section,text FROM pictures WHERE doc=? AND text<>'' ORDER BY id") : null;
             page = db.prepareStatement("INSERT INTO reference_pages(doc,number,section,text) VALUES(?,?,?,?) RETURNING id");
             postings = db.prepareStatement("INSERT INTO reference_body_terms(rowid,heading,body) VALUES(?,?,?)");
         }
 
         void writeConverted(long doc) throws SQLException {
-            try (var version = lines.getConnection().prepareStatement("""
-                    INSERT INTO reference_documents(doc,hash,generation,note_stamp)
-                    SELECT d.id,v.hash,v.generation,d.stamp FROM docs d JOIN evidence_version v ON v.doc=d.id
-                    WHERE d.id=?
-                    """)) {
-                version.setLong(1, doc);
-                if (version.executeUpdate() != 1) return;
-            }
+            version.setLong(1, doc);
+            if (version.executeUpdate() != 1) return;
             var pages = new LinkedHashMap<Integer, PageText>();
             lines.setLong(1, doc);
             try (var rows = lines.executeQuery()) {
@@ -275,13 +281,15 @@ final class ReferenceIndex {
                     if (text != null) text.add(rows.getString(2));
                 }
             }
-            pictures.setLong(1, doc);
-            try (var rows = pictures.executeQuery()) {
-                while (rows.next()) {
-                    var match = SECTION.matcher(rows.getString(1));
-                    if (!match.matches()) continue;
-                    var text = pages.get(Integer.parseInt(match.group(1)));
-                    if (text != null) text.addOcr(rows.getString(2));
+            if (pictures != null) {
+                pictures.setLong(1, doc);
+                try (var rows = pictures.executeQuery()) {
+                    while (rows.next()) {
+                        var match = SECTION.matcher(rows.getString(1));
+                        if (!match.matches()) continue;
+                        var text = pages.get(Integer.parseInt(match.group(1)));
+                        if (text != null) text.addOcr(rows.getString(2));
+                    }
                 }
             }
             for (var entry : pages.entrySet()) save(doc, entry.getKey(), entry.getValue());
@@ -310,7 +318,7 @@ final class ReferenceIndex {
         }
 
         @Override public void close() throws SQLException {
-            try (lines; pictures; page; postings) { /* All four statements belong to this writer. */ }
+            try (version; lines; pictures; page; postings) { /* The statements belong to this writer. */ }
         }
     }
 
@@ -382,9 +390,14 @@ final class ReferenceIndex {
     }
 
     static List<Page> search(String query, SearchIndex.Focus focus) throws IOException {
+        return searchDetailed(query, focus).pages();
+    }
+
+    static SearchResult searchDetailed(String query, SearchIndex.Focus focus) throws IOException {
         String match = match(query);
-        if (match.isEmpty()) return List.of();
-        return SearchIndex.readIndex(db -> {
+        var empty = new SearchResult(List.of(), false);
+        if (match.isEmpty()) return empty;
+        var results = SearchIndex.readIndex(db -> {
             db.setAutoCommit(false);
             if (!installed(db)) return List.of();
             var files = new LiveFiles();
@@ -403,8 +416,9 @@ final class ReferenceIndex {
                     }
                 }
             }
-            return List.copyOf(result);
+            return List.of(new SearchResult(List.copyOf(result), files.unavailable));
         });
+        return results.isEmpty() ? empty : results.getFirst();
     }
 
     private static void addRanks(Map<Key, Scored> scores, List<Ranked> ranks) {
@@ -451,10 +465,13 @@ final class ReferenceIndex {
     private static final class LiveFiles {
         private final Map<Path, String> hashes = new HashMap<>();
         private final Map<Path, Boolean> notes = new HashMap<>();
+        private boolean unavailable;
 
         boolean current(Indexed indexed) {
-            return notes.computeIfAbsent(indexed.note, ignored -> noteCurrent(indexed))
+            boolean current = notes.computeIfAbsent(indexed.note, ignored -> noteCurrent(indexed))
                     && indexed.hash.equals(hashes.computeIfAbsent(indexed.source, LiveFiles::hash));
+            if (!current) unavailable = true;
+            return current;
         }
 
         private static String hash(Path source) {
@@ -554,9 +571,9 @@ final class ReferenceIndex {
             sql.execute("BEGIN IMMEDIATE");
             if (!installed(db)) return false;
             var selected = new LinkedHashMap<Indexed, Long>();
-            String candidates = "SELECT " + IDENTITY + ",p.id FROM reference_pages p JOIN docs d ON d.id=p.doc"
+            String candidates = "SELECT " + IDENTITY + ",p.id FROM reference_pages p JOIN "
+                    + visibleDocuments(db) + " d ON d.id=p.doc"
                     + " JOIN reference_documents v ON v.doc=d.id WHERE d.source=? AND v.hash=?"
-                    + " AND NOT EXISTS (SELECT 1 FROM large_pending pending WHERE pending.md=d.md)"
                     + " ORDER BY d.md,p.number";
             try (var q = db.prepareStatement(candidates)) {
                 q.setString(1, source.toString());
