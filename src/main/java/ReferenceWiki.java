@@ -40,7 +40,29 @@ final class ReferenceWiki {
         String describe(BufferedImage image) throws Exception;
     }
 
-    static String prepare(Consumer<String> status) throws Exception {
+    record Target(Path source,String hash,int slides) {}
+
+    static List<Target> plan() throws IOException {
+        ReferenceIndex.prepare();
+        return SearchIndex.readIndex(db -> {
+            if (!ReferenceIndex.installed(db)) return List.of();
+            var result = new java.util.LinkedHashMap<Path,Target>();
+            try (var stmt=db.createStatement(); var rows=stmt.executeQuery("""
+                    SELECT d.source,v.hash,count(p.id) FROM visible_docs d
+                    JOIN reference_documents v ON v.doc=d.id JOIN reference_pages p ON p.doc=d.id
+                    LEFT JOIN reference_captions c ON c.page=p.id
+                    GROUP BY d.id HAVING count(c.page)<count(p.id) ORDER BY d.md
+                    """)) {
+                while(rows.next()){
+                    Path path=Path.of(rows.getString(1));
+                    result.putIfAbsent(path,new Target(path,rows.getString(2),rows.getInt(3)));
+                }
+            }
+            return List.copyOf(result.values());
+        });
+    }
+
+    static String prepare(Consumer<String> status,List<Target> plan) throws Exception {
         var provider = AgentConnection.preferred();
         String model = AgentConnection.model(provider);
         var effort = AgentConnection.effort(provider);
@@ -51,21 +73,18 @@ final class ReferenceWiki {
         String selectedModel = model;
         var selectedEffort = effort;
         String provenance = provider.name() + "/" + (model.isEmpty() ? "cli-default" : model);
-        return prepare(status, provenance, image -> describe(provider, selectedModel, selectedEffort, image));
+        return prepare(status, provenance, image -> describe(provider, selectedModel, selectedEffort, image),plan);
     }
 
     static String prepare(Consumer<String> status, String model, Captioner captioner) throws Exception {
+        return prepare(status,model,captioner,plan());
+    }
+
+    private static String prepare(Consumer<String> status,String model,Captioner captioner,List<Target> pending) throws Exception {
         checkInterrupted();
         if (!PREPARING.compareAndSet(false, true)) throw new IOException("장표 설명을 이미 준비 중입니다.");
         try {
             status.accept("준비할 장표 확인 중…");
-            List<Path> pending;
-            try {
-                ReferenceIndex.prepare();
-                pending = ReferenceIndex.pendingSources();
-            } catch (IOException e) {
-                throw new IOException("준비할 장표 목록을 읽을 수 없습니다.", e);
-            }
             checkInterrupted();
             if (pending.isEmpty()) return "준비할 장표 설명이 없습니다.";
             int documents = 0;
@@ -73,11 +92,13 @@ final class ReferenceWiki {
             int failed = 0;
             for (int i = 0; i < pending.size(); i++) {
                 checkInterrupted();
-                Path source = pending.get(i);
+                Target target = pending.get(i);
+                Path source = target.source();
                 String progress = "문서 " + (i + 1) + "/" + pending.size() + " · 저장 " + counts(documents, slides);
                 status.accept(progress);
                 try {
                     var pages = ReferenceIndex.pages(source);
+                    if (pages.size()!=target.slides() || !target.hash().equals(pages.getFirst().sha256())) throw new EvidenceIndex.Changed();
                     Map<Integer, String> descriptions = captions(source, pages, captioner, progress, status);
                     checkInterrupted();
                     requireCurrent(pages.getFirst());

@@ -394,6 +394,11 @@ final class ReferenceIndex {
     }
 
     static SearchResult searchDetailed(String query, SearchIndex.Focus focus) throws IOException {
+        return searchDetailed(query,focus,null);
+    }
+
+    static SearchResult searchDetailed(String query, SearchIndex.Focus focus, List<String> notes) throws IOException {
+        String allowed = notes == null ? null : OfficeIndexMcp.JSON.toJson(notes);
         String match = match(query);
         var empty = new SearchResult(List.of(), false);
         if (match.isEmpty()) return empty;
@@ -403,9 +408,9 @@ final class ReferenceIndex {
             var files = new LiveFiles();
             var scores = new HashMap<Key, Scored>();
             addRanks(scores, ranked(db, "reference_body_terms", "bm25(reference_body_terms,6.0,1.0)",
-                    match, focus, files));
+                    match, focus, files, allowed));
             addRanks(scores, ranked(db, "reference_caption_terms", "bm25(reference_caption_terms)",
-                    match, focus, files));
+                    match, focus, files, allowed));
             var result = new ArrayList<Page>(LIMIT);
             try (var text = db.prepareStatement("SELECT text FROM reference_pages WHERE id=?")) {
                 for (var scored : scores.values().stream().sorted(ORDER).limit(LIMIT).toList()) {
@@ -416,15 +421,16 @@ final class ReferenceIndex {
                     }
                 }
             }
-            return List.of(new SearchResult(List.copyOf(result), files.unavailable || pendingInScope(db,focus)));
+            return List.of(new SearchResult(List.copyOf(result), files.unavailable || pendingInScope(db,focus,allowed)));
         });
         return results.isEmpty() ? empty : results.getFirst();
     }
 
-    private static boolean pendingInScope(Connection db, SearchIndex.Focus focus) throws SQLException {
+    private static boolean pendingInScope(Connection db, SearchIndex.Focus focus,String allowed) throws SQLException {
         String sql = "SELECT 1 FROM reference_legacy_queue q JOIN visible_docs d ON d.id=q.doc"
-                + (focus == null ? "" : " WHERE d.md=?") + " LIMIT 1";
+                + " WHERE 1=1" + (focus == null ? "" : " AND d.md=?") + membership(allowed) + " LIMIT 1";
         try (var statement = db.prepareStatement(sql)) {
+            if (allowed != null) statement.setString(focus == null ? 1 : 2, allowed);
             if (focus != null) statement.setString(1, focus.md().toAbsolutePath().normalize().toString());
             try (var rows = statement.executeQuery()) { return rows.next(); }
         }
@@ -439,16 +445,21 @@ final class ReferenceIndex {
         }
     }
 
+    private static String membership(String allowed) {
+        return allowed == null ? "" : " AND d.md IN (SELECT value FROM json_each(?))";
+    }
+
     private static List<Ranked> ranked(Connection db, String table, String score, String match,
-                                       SearchIndex.Focus focus, LiveFiles files) throws SQLException {
+                                       SearchIndex.Focus focus, LiveFiles files, String allowed) throws SQLException {
         String restrict = focus == null ? "" : " AND d.md=?" + (focus.section() == null ? "" : " AND p.section=?");
         String sql = "SELECT " + IDENTITY + ",p.id" + VISIBLE + " JOIN " + table + " ON " + table + ".rowid=p.id"
-                + " WHERE " + table + " MATCH ?" + restrict
+                + " WHERE " + table + " MATCH ?" + restrict + membership(allowed)
                 + " ORDER BY " + score + ",d.source,p.number,v.hash,d.md";
         var best = new ArrayList<Ranked>(LIMIT);
         var seen = new HashSet<Key>();
         try (var q = db.prepareStatement(sql)) {
             q.setString(1, match);
+            if (allowed != null) q.setString(focus == null ? 2 : focus.section() == null ? 3 : 4, allowed);
             if (focus != null) {
                 q.setString(2, focus.md().toAbsolutePath().normalize().toString());
                 if (focus.section() != null) q.setString(3, focus.section());

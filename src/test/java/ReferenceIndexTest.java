@@ -37,6 +37,25 @@ class ReferenceIndexTest {
         return pages.stream().map(ReferenceIndex.Page::number).toList();
     }
 
+    @Test void contextualSearchRanksOnlyTheDisplayedDocuments() throws Exception {
+        Path a=folder.resolve("a.pptx"), b=folder.resolve("b.pptx");
+        writeDeck(a,"시스템 구성도"); writeDeck(b,"시스템 구성도");
+        Path note=converted(a); converted(b);
+        ReferenceIndex.prepare();
+        assertEquals(2,ReferenceIndex.search("구성도",null).size());
+        var scoped=ReferenceIndex.searchDetailed("구성도",null,List.of(note.toString()));
+        assertEquals(List.of(a),scoped.pages().stream().map(page->page.hit().source()).toList());
+        assertTrue(ReferenceIndex.searchDetailed("구성도",null,List.of()).pages().isEmpty());
+        var page=scoped.pages().getFirst();
+        var server=new OfficeIndexMcp.Row(note.toString(),a.toString(),"a","슬라이드 1",page.text(),"","",
+                page.number(),page.version(),page.sha256());
+        var restored=OfficeIndexMcp.JSON.fromJson(OfficeIndexMcp.JSON.toJson(server),OfficeIndexMcp.Row.class);
+        assertEquals(page,restored.currentPage(page.hit()));
+        assertEquals(2,ReferenceWiki.plan().stream().mapToInt(ReferenceWiki.Target::slides).sum());
+        Files.delete(a);
+        assertThrows(IOException.class,()->restored.currentPage(page.hit()));
+    }
+
     @Test void searchesTruePartialWordsAndScopesEachPage() throws Exception {
         Path source = folder.resolve("slides.pptx");
         writeDeck(source, "자동권한등록절차", "등록 록절", "", "격리망");
