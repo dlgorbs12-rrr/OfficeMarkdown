@@ -166,6 +166,10 @@ final class SearchIndex {
     }
 
     static <T> List<T> readIndex(Query<T> query) throws IOException {
+        return readIndex(null,query);
+    }
+
+    static <T> List<T> readIndex(List<String> notes,Query<T> query) throws IOException {
         Path database = database();
         if (!Files.isRegularFile(database)) return List.of();
         try (Connection db = openReader(database);
@@ -187,6 +191,14 @@ final class SearchIndex {
             String role=hasRoles?"coalesce(r.manual,r.inferred,'')":"''";
             String join=hasRoles?" LEFT JOIN document_roles r ON r.md=d.md":"";
             String predicate = visibilityPredicate(hasQueue);
+            if(notes!=null){
+                sql.execute("CREATE TEMP TABLE selected_notes(md TEXT PRIMARY KEY)");
+                try(var insert=db.prepareStatement("INSERT OR IGNORE INTO selected_notes SELECT value FROM json_each(?)")){
+                    insert.setString(1,OfficeIndexMcp.JSON.toJson(notes));
+                    insert.executeUpdate();
+                }
+                join+=" JOIN selected_notes selected ON selected.md=d.md";
+            }
             sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.*,"+role+" AS role,"+manualRole+" AS manual_role FROM main.docs d"+join + predicate);
             boolean hasPictureText;
             try(var t=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='picture_search_ocr'")){

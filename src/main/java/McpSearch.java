@@ -9,10 +9,12 @@ final class McpSearch {
         if(!value.contains("'"))return "'"+value+"'";
         return OfficeIndexMcp.JSON.toJson(value).replace("\"", "\\\"");
     }
-    private static List<String> options(Path session,DocumentAgent.Provider provider,Path root,SearchIndex.Focus focus) throws Exception {
+    private static List<String> options(Path session,DocumentAgent.Provider provider,Path root,SearchIndex.Focus focus,List<String> notes) throws Exception {
         var config=Map.of("root",root.toAbsolutePath().toString(),"focus",focus==null?"":focus.md().toAbsolutePath().toString(),
                 "section",focus==null?"":Objects.toString(focus.section(),""));
-        Files.writeString(session.resolve("config"),OfficeIndexMcp.JSON.toJson(config));
+        var sessionConfig=new LinkedHashMap<String,Object>(config);
+        if(notes!=null)sessionConfig.put("notes",notes);
+        Files.writeString(session.resolve("config"),OfficeIndexMcp.JSON.toJson(sessionConfig));
         Path code=Path.of(McpSearch.class.getProtectionDomain().getCodeSource().getLocation().toURI());
         Path launcher=code.getParent().getParent().resolve("OfficeIndexMcp.exe");
         var args=new ArrayList<String>();
@@ -61,14 +63,20 @@ final class McpSearch {
 
     static Reply chat(DocumentAgent.Provider provider,Path library,String question,String history,String model,
                       DocumentAgent.Effort effort,SearchIndex.Focus focus,Consumer<String> activity) throws Exception {
+        return chat(provider,library,question,history,model,effort,focus,null,activity);
+    }
+
+    static Reply chat(DocumentAgent.Provider provider,Path library,String question,String history,String model,
+                      DocumentAgent.Effort effort,SearchIndex.Focus focus,List<String> notes,Consumer<String> activity) throws Exception {
+        if(notes!=null && notes.isEmpty())throw new IOException("검색할 문서를 선택하세요.");
         var adapter = AdapterDiscovery.plan(question);
         var route = route(question,history,adapter);
         if (route == Route.ADAPTER) {
             activity.accept("대상 시스템이 명시된 어댑터 설계서를 확인하는 중…");
-            return AdapterDiscovery.find(adapter,focus,question);
+            return AdapterDiscovery.find(adapter,focus,question,notes);
         }
         if(route == Route.SLIDES){
-            var recommendations=ReferenceSearch.search(question,focus,provider,model,effort,activity);
+            var recommendations=ReferenceSearch.evaluate(question,focus,ReferenceSearch.reader(provider,model,effort,u->{}),activity,notes).recommended();
             var claims=new ArrayList<DocumentAgent.Claim>();
             var message=new StringBuilder();
             for(var item:recommendations){
@@ -81,7 +89,7 @@ final class McpSearch {
         }
         Path session=Files.createTempDirectory("office-chat-mcp-");
         try{
-            var options=options(session,provider,library,focus);
+            var options=options(session,provider,library,focus,notes);
             Path events=Files.createFile(session.resolve("activity"));
             var cursor=new Object(){
                 int count;
@@ -136,7 +144,7 @@ final class McpSearch {
         if(!Files.isRegularFile(SearchIndex.database()))throw new IOException("먼저 문서를 색인하세요.");
         Path session=Files.createTempDirectory("office-index-mcp-");
         try{
-            var options=options(session,provider,root,focus);
+            var options=options(session,provider,root,focus,null);
             status.accept("에이전트가 색인에서 후보를 찾고 원문 근거를 확인하고 있습니다.");
             String reply=DocumentAgent.invoke(provider,model,effort,"""
                     당신은 NETS IAM/SSO 프로젝트 PM을 위한 문서 검색 담당자입니다. office MCP search로 요청 산출물명을 먼저 찾고 필요하면 짧은 동의어로 재검색하세요. list_sections로 후보의 목차를 비교하고 read_evidence로 용도에 맞는 원문을 확인하세요. 이미지 요청은 image 필드를 쓰세요.

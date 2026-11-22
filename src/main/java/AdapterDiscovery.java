@@ -22,8 +22,8 @@ final class AdapterDiscovery {
         return new PmReference(PmReference.Kind.ADAPTER,List.of(target),List.of());
     }
 
-    static McpSearch.Reply find(PmReference plan, SearchIndex.Focus focus, String question) throws IOException {
-        var matches = SearchIndex.readIndex(db -> plan.search(db,focus,question,true));
+    static McpSearch.Reply find(PmReference plan, SearchIndex.Focus focus, String question,List<String> notes) throws IOException {
+        var matches = SearchIndex.readIndex(notes,db -> plan.search(db,focus,question,true));
         var claims = new ArrayList<DocumentAgent.Claim>();
         var text = new StringJoiner("\n\n");
         for (var match : matches.stream().limit(8).toList()) {

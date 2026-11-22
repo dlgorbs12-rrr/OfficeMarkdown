@@ -21,6 +21,7 @@ public final class OfficeIndexMcp {
     }
     private final Path session;
     private final String focus,section;
+    private final List<String> notes;
     private final List<String> documents=new ArrayList<>();
     private int calls,evidence;
     private final Map<String,ReferenceIndex.Page> slideHandles=new HashMap<>();
@@ -35,6 +36,7 @@ public final class OfficeIndexMcp {
         Path root=Path.of(string(config,"root")).toAbsolutePath().normalize();
         SearchIndex.importPreviousIndex(root);
         if((session==null || !Files.exists(session.resolve("activity"))) && !Files.isRegularFile(SearchIndex.database()))throw new IOException("먼저 문서를 색인하세요.");
+        notes=config.has("notes") ? config.getAsJsonArray("notes").asList().stream().map(JsonElement::getAsString).toList() : null;
         focus=string(config,"focus");
         section=string(config,"section");
     }
@@ -72,7 +74,7 @@ public final class OfficeIndexMcp {
             ReferenceIndex.prepare();
             SearchIndex.Focus scope=focus.isEmpty()?null:new SearchIndex.Focus(Path.of(focus),section.isBlank()?null:section);
             var rows=new ArrayList<Object>();
-            var ranked=ReferenceIndex.searchDetailed(query,scope);
+            var ranked=ReferenceIndex.searchDetailed(query,scope,notes);
             if(ranked.pages().isEmpty() && ranked.unavailable())throw new IOException("현재 범위의 장표 원본을 확인할 수 없습니다.");
             for(var page:ranked.pages()){
                 String handle="P"+(++slideSerial);
@@ -153,7 +155,7 @@ public final class OfficeIndexMcp {
         int offset=a.has("offset")?a.get("offset").getAsInt():0;
         if(offset<0 || offset>100000)throw new IllegalArgumentException("Invalid offset");
         String query=sql+" OFFSET "+offset;
-        var rows=SearchIndex.readIndex(db->{
+        var rows=SearchIndex.readIndex(notes,db->{
             // SQLite lower() only folds ASCII. Use the same normalization as indexed text.
             org.sqlite.Function.create(db,"office_lower",new org.sqlite.Function() {
                 @Override protected void xFunc() throws java.sql.SQLException {

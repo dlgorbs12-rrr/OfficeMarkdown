@@ -7,6 +7,27 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OfficeIndexMcpTest {
     @TempDir Path root;
+    @Test void checkedDocumentsLimitAllAgentEvidenceAndAnEmptySelectionStaysEmpty() throws Exception {
+        var notes=new ArrayList<String>();
+        for(String name:List.of("one","two","unselected")){
+            Path md=root.resolve(name+".md");notes.add(md.toString());
+            Files.writeString(md,"# AD 어댑터 설계서 "+name+"\n\n[원본 파일 열기](<"+root.resolve(name+".xlsx").toUri()+">)\n\n## 계정 매핑\nfield "+name);
+        }
+        SearchIndex.synchronize(root,p->{});
+        for(var allowed:List.of(notes.subList(0,2),List.<String>of())){
+            Files.writeString(root.resolve("config"),OfficeIndexMcp.JSON.toJson(Map.of("root",root.toString(),"notes",allowed)));
+            var server=new OfficeIndexMcp(root);
+            var hits=server.call("search",json("{'query':'설계서','field':'title'}"));
+            assertEquals(allowed.size(),hits.size());
+            assertTrue(server.call("search",json("{'query':'unselected','field':'body'}")).isEmpty());
+            if(!allowed.isEmpty()){
+                var reply=McpSearch.chat(null,root,"AD 어댑터 설계서 찾아줘","","",null,null,allowed,p->{});
+                assertEquals(2,reply.sources().size());
+                assertTrue(reply.sources().stream().allMatch(c->allowed.contains(c.proof().md().toString())));
+            }else assertThrows(java.io.IOException.class,()->McpSearch.chat(null,root,"찾아줘","","",null,null,allowed,p->{}));
+        }
+    }
+
     @Test void scopedHandlesFiltersAndCitationWindow() throws Exception {
         Path doc=root.resolve("a.md");
         String note="# IAM 사전조사서\n\n[원본 파일 열기](<"+root.resolve("a.xlsx").toUri()+">)\n\n## 조사\n\n"+"a".repeat(1600)+" 연동항목\n\n## 기타\n\n다른 구역\n";

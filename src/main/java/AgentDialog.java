@@ -35,8 +35,18 @@ final class AgentDialog extends JPanel {
     private DocumentAgent.Claim selected;
     private final JPanel detail=new JPanel(new BorderLayout());
     private final JSplitPane results=new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
-    private final CardLayout sideLayout=new CardLayout();
-    private final JPanel sidebar=new SearchStudio.Round(sideLayout,20,Color.WHITE,LibraryStyle.LINE,1);
+    private final JTabbedPane documentTabs=new JTabbedPane();
+    private final ChatTargets targets=new ChatTargets(this::checkedScope,this::previewTarget);
+    private final java.util.IdentityHashMap<DocumentAgent.Claim,List<DocumentAgent.Claim>> answerGroups=new java.util.IdentityHashMap<>();
+    private final JButton previous=new JButton("이전 출처"),next=new JButton("다음 출처");
+    private final JComboBox<Integer> zoom=new JComboBox<>(new Integer[]{50,75,100,125,150,200});
+    private JDialog previewWindow;
+    private BufferedImage previewBitmap;
+    private String previewHtml="";
+    private record TurnScope(SearchIndex.Focus focus,List<String> notes) {}
+    private TurnScope previousScope;
+
+    private final JPanel sidebar=new SearchStudio.Round(new BorderLayout(),20,Color.WHITE,LibraryStyle.LINE,1);
     private final ChatDocuments documents=new ChatDocuments(this::showSelected);
     private record ScopeChoice(String label, SearchIndex.Focus target) {
         @Override public String toString() { return label; }
@@ -68,7 +78,7 @@ final class AgentDialog extends JPanel {
         newChat.addActionListener(e->{
             conversation.removeAll();
             history.clear();
-            documents.clear();
+            documents.clear();answerGroups.clear();targets.select(List.of());previousScope=null;
             hidePreview();
             scopes.setSelectedItem(ALL);
             updateScopes(null);
@@ -110,17 +120,18 @@ final class AgentDialog extends JPanel {
         threadScroll.setPreferredSize(new Dimension(430,320));
         threadScroll.setBorder(null);
 
-        var closePreview=new JButton("‹  문서 목록");
-        LibraryStyle.button(closePreview,false);
-        closePreview.addActionListener(e->hidePreview());
         var detailHeader=LibraryStyle.panel(new BorderLayout(0,4),0);
         var navigation=LibraryStyle.panel(new BorderLayout(),0);
-        navigation.add(closePreview,BorderLayout.WEST);
+        var browse=new JPanel(new FlowLayout(FlowLayout.LEFT,5,0));
+        browse.add(previous);browse.add(next);browse.add(new JLabel("확대/축소 (%)"));browse.add(zoom);
+        zoom.setSelectedItem(100);zoom.addActionListener(e->renderPreview());
+        previous.addActionListener(e->stepPreview(-1));next.addActionListener(e->stepPreview(1));
+        navigation.add(browse,BorderLayout.WEST);
         detailHeader.add(navigation,BorderLayout.NORTH);
         var toolbar=LibraryStyle.panel(new BorderLayout(3,0),0);
         toolbar.add(LibraryStyle.label("미리보기",13,true,LibraryStyle.INK),BorderLayout.WEST);
         var documentActions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,3,0),0);
-        for (var button:List.of(closePreview,position,original)) {
+        for (var button:List.of(position,original)) {
             LibraryStyle.button(button,false);
             button.setFont(LibraryStyle.TYPE.deriveFont(12f));
             button.putClientProperty("JButton.buttonType",null);
@@ -133,8 +144,9 @@ final class AgentDialog extends JPanel {
         detailHeader.add(toolbar,BorderLayout.CENTER);
         detail.setOpaque(false);
         detail.add(detailHeader,BorderLayout.NORTH);
-        var readerScroll=new JScrollPane(answer);
-        readerScroll.setColumnHeaderView(image);
+        var pageBody=new JPanel(new BorderLayout());
+        pageBody.add(image,BorderLayout.NORTH);pageBody.add(answer);
+        var readerScroll=new JScrollPane(pageBody);
         readerScroll.getColumnHeader().setBackground(Color.WHITE);
         readerScroll.setBorder(BorderFactory.createMatteBorder(1,0,1,0,LibraryStyle.LINE));
         readerScroll.getViewport().setBackground(Color.WHITE);
@@ -150,8 +162,11 @@ final class AgentDialog extends JPanel {
         sidebar.setBorder(BorderFactory.createEmptyBorder(12,12,12,12));
         sidebar.setPreferredSize(new Dimension(360,320));
         sidebar.setMinimumSize(new Dimension(245,120));
-        sidebar.add(documents,"list");
-        sidebar.add(detail,"preview");
+        documentTabs.addTab("검색 대상",targets);
+        documentTabs.addTab("대화 출처",documents);
+        sidebar.add(documentTabs);
+        targets.refresh();
+
         var chatColumn=LibraryStyle.panel(new BorderLayout(0,8),0);
         chatColumn.add(threadScroll);
         results.setLeftComponent(chatColumn);
@@ -168,7 +183,15 @@ final class AgentDialog extends JPanel {
         scopes.setBackground(new Color(0xEEF2E7));
         scopes.setPrototypeDisplayValue(new ScopeChoice("이 구역만 · 운영 가이드.xlsx › 검토 절차",null));
         scopes.getAccessibleContext().setAccessibleName("검색 범위");
-        scopes.addActionListener(e->scopes.setToolTipText(currentScope().label()));
+        scopes.addActionListener(e->{
+            var choice=currentScope();
+            if(choice!=null)scopes.setToolTipText(choice.label());
+            if(!updatingScopes && ALL.equals(choice) && !targets.selection().isEmpty()){
+                targets.select(List.of());
+                SwingUtilities.invokeLater(()->{if(ALL.equals(currentScope()))updateScopes(selected==null?null:selected.proof());});
+            }
+        });
+        updateScopes(null);
         scopeRow.add(scopeLabel,BorderLayout.WEST);
         scopeRow.add(scopes,BorderLayout.CENTER);
         var scopeLine=LibraryStyle.panel(new BorderLayout(),0);
@@ -234,7 +257,7 @@ final class AgentDialog extends JPanel {
         };
     }
 
-    void focusQuestion() { question.requestFocusInWindow(); }
+    void focusQuestion() { targets.refresh();question.requestFocusInWindow(); }
 
     private final JLabel welcome=LibraryStyle.label("에이전트와 어떤 작업을 할까요?",18,true,LibraryStyle.INK);
 
@@ -309,6 +332,15 @@ final class AgentDialog extends JPanel {
         });
         body.add(message);
         documents.append(reply.sources());
+        if(!reply.sources().isEmpty()){
+            for(var claim:reply.sources()){
+                answerGroups.put(claim,reply.sources());
+                var large=new JButton(claim.proof().title()+" · "+claim.proof().section()+"  크게 보기");
+                large.putClientProperty("html.disable",true);
+                large.addActionListener(e->showSelected(claim));body.add(large);
+            }
+            documentTabs.setSelectedComponent(documents);
+        }
     }
 
     static String relevanceHtml(DocumentAgent.Claim claim,boolean expanded){
@@ -350,11 +382,28 @@ final class AgentDialog extends JPanel {
         return (ScopeChoice)scopes.getSelectedItem();
     }
 
+    private boolean updatingScopes;
+    private ScopeChoice selectedChoice(){return new ScopeChoice("선택한 문서 "+targets.selection().size()+"개",null);}
+    private boolean isChecked(ScopeChoice choice){return !ALL.equals(choice) && choice!=null && choice.target()==null;}
+    private void checkedScope(){
+        updateScopes(selected==null?null:selected.proof());
+        scopes.setSelectedItem(selectedChoice());
+    }
+    void useResults(List<String> notes,String draft){
+        targets.select(notes);targets.refresh();checkedScope();
+        documentTabs.setSelectedComponent(targets);question.setText(draft);focusQuestion();
+    }
+    private void previewTarget(ChatTargets.Doc doc){
+        var hit=new Library.Hit(Path.of(doc.md()),Path.of(doc.source()),doc.title(),"","");
+        showSelected(new DocumentAgent.Claim("문서 미리보기",hit));
+    }
     private void updateScopes(Library.Hit hit) {
         var active=currentScope();
         var options=new java.util.LinkedHashSet<ScopeChoice>();
         options.add(ALL);
-        options.add(active);
+        options.add(selectedChoice());
+        if(isChecked(active))active=selectedChoice();
+        if(active!=null)options.add(active);
         if(hit!=null) {
             String file=hit.source().getFileName().toString();
             options.add(new ScopeChoice("문서 전체 · "+file,new SearchIndex.Focus(hit.md(),null)));
@@ -363,7 +412,8 @@ final class AgentDialog extends JPanel {
         }
         var model=new DefaultComboBoxModel<>(options.toArray(ScopeChoice[]::new));
         model.setSelectedItem(active);
-        scopes.setModel(model);
+        updatingScopes=true;
+        try{scopes.setModel(model);}finally{updatingScopes=false;}
         scopes.setToolTipText(active.label());
     }
 
@@ -371,7 +421,7 @@ final class AgentDialog extends JPanel {
         if(previewTask!=null)previewTask.cancel(true);
         selected=null;
         updateScopes(null);
-        sideLayout.show(sidebar,"list");
+        if(previewWindow!=null)previewWindow.setVisible(false);
         documents.focusList();
     }
 
@@ -397,7 +447,18 @@ final class AgentDialog extends JPanel {
         original.setEnabled(claim!=null);position.setEnabled(claim!=null);
         if(claim==null){answer.setText("");return;}
         var hit=claim.proof();
-        sideLayout.show(sidebar,"preview");
+        if(previewWindow==null){
+            previewWindow=new JDialog(SwingUtilities.getWindowAncestor(this),"자료 미리보기",Dialog.ModalityType.MODELESS);
+            previewWindow.setDefaultCloseOperation(WindowConstants.HIDE_ON_CLOSE);
+            previewWindow.setContentPane(detail);previewWindow.setSize(940,700);
+            previewWindow.setLocationRelativeTo(this);
+        }
+        previewWindow.setTitle(hit.title()+" · "+hit.section());
+        if(!previewWindow.isVisible())previewWindow.setVisible(true);
+        previewWindow.toFront();
+        var group=answerGroups.getOrDefault(claim,List.of(claim));
+        int at=group.indexOf(claim);previous.setEnabled(at>0);next.setEnabled(at>=0 && at+1<group.size());
+        previewBitmap=null;previewHtml="";
         String heading="<html><head><style>body{font-family:'Malgun Gothic';font-size:11pt;color:#25251f;margin:10px}"
                 +"h2{font-size:15pt;margin:0 0 5px} .section{color:#b74323;font-weight:bold}"
                 +".path{color:#706e62;font-size:9pt} blockquote{background:#fbf8f3;margin:10px 0;padding:8px}"
@@ -415,7 +476,7 @@ final class AgentDialog extends JPanel {
                     var bitmap=PictureAssets.preview(hit.md(),hit.picture(),false);
                     return new Detail(bitmap==null ? "<p>그림 파일을 읽을 수 없습니다.</p>" : "",bitmap);
                 }
-                var page=MarkdownReader.previewPage(hit.md(),hit);
+                var page=hit.section().isBlank()?MarkdownReader.firstPage(hit.md()):MarkdownReader.previewPage(hit.md(),hit);
                 return new Detail(page==null ? "<p>현재 변환본에서 해당 구역을 찾지 못했습니다.</p>"
                         : org.jsoup.Jsoup.parse(MarkdownReader.html(page,hit.picture(),hit.md())).body().html(),null);
             }
@@ -423,18 +484,30 @@ final class AgentDialog extends JPanel {
                 if(isCancelled() || selected!=claim)return;
                 try{
                     Detail detail=get();
-                    if(detail.picture()!=null){
-                        var bitmap=detail.picture();
-                        double scale=Math.min(1,Math.min(Math.max(120,sidebar.getWidth()-64)/(double)bitmap.getWidth(),220d/bitmap.getHeight()));
-                        image.setIcon(new ImageIcon(bitmap.getScaledInstance(Math.max(1,(int)(bitmap.getWidth()*scale)),
-                                Math.max(1,(int)(bitmap.getHeight()*scale)),Image.SCALE_SMOOTH)));
-                    }
-                    answer.setText(evidence+detail.html()+"</body></html>");
+                    previewBitmap=detail.picture();
+                    previewHtml=evidence+detail.html()+"</body></html>";
+                    renderPreview();
                 } catch(Exception ex){answer.setText(evidence+"<p>저장된 미리보기를 읽을 수 없습니다.</p></body></html>");}
                 answer.setCaretPosition(0);
             }
         };
         previewTask=loader;loader.execute();
+    }
+
+    private void stepPreview(int delta){
+        var group=answerGroups.get(selected);
+        if(group==null)return;
+        int index=group.indexOf(selected)+delta;
+        if(index>=0 && index<group.size())showSelected(group.get(index));
+    }
+    private void renderPreview(){
+        int percent=(Integer)zoom.getSelectedItem();
+        if(previewBitmap!=null){
+            int w=Math.max(1,previewBitmap.getWidth()*percent/100),h=Math.max(1,previewBitmap.getHeight()*percent/100);
+            image.setIcon(new ImageIcon(previewBitmap.getScaledInstance(w,h,Image.SCALE_SMOOTH)));
+        }
+        if(!previewHtml.isEmpty())answer.setText(previewHtml.replace("font-size:11pt","font-size:"+(11.0*percent/100)+"pt"));
+        answer.setCaretPosition(0);
     }
 
     private JPanel field(String name,JComponent control){
@@ -584,8 +657,13 @@ final class AgentDialog extends JPanel {
         }
         var choice=reasoning;
         question.setText("");
-        String context=String.join("\n",history);
         SearchIndex.Focus scope=currentScope().target();
+        List<String> notes=isChecked(currentScope())?targets.selection():null;
+        if(notes!=null && notes.isEmpty()){question.setText(text);state.setText("검색할 문서를 선택하거나 전체 문서로 전환하세요.");return;}
+        var selection=new TurnScope(scope,notes);
+        if(!selection.equals(previousScope))history.clear();
+        previousScope=selection;
+        String context=String.join("\n",history);
         JPanel turn=beginTurn(text);
         var transcript=LibraryStyle.panel(null,4);
         transcript.setLayout(new BoxLayout(transcript,BoxLayout.Y_AXIS));
@@ -619,7 +697,7 @@ final class AgentDialog extends JPanel {
         state.setText("Office MCP 연결 중…");providers.setEnabled(false);
         task=new SwingWorker<>(){
             protected McpSearch.Reply doInBackground() throws Exception{
-                return McpSearch.chat(provider,library,text,context,model,choice,scope,this::publish);
+                return McpSearch.chat(provider,library,text,context,model,choice,scope,notes,this::publish);
             }
             int calls;
             protected void process(List<String> events){

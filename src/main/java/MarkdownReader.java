@@ -19,6 +19,12 @@ final class MarkdownReader {
         return pages;
     }
 
+    static Page firstPage(Path file) throws IOException {
+        Page[] first={null};
+        scan(file,page->{first[0]=page;return true;});
+        return first[0];
+    }
+
     static Page previewPage(Path file, Library.Hit hit) throws IOException {
         class Selection {
             Page first, match;

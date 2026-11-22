@@ -26,8 +26,8 @@ public final class OfficeMarkdown {
     private final JComboBox<ImageOcr.Mode> ocrMode=new JComboBox<>(ImageOcr.Mode.values());
     private final JFrame frame = new JFrame("검색 보관함 · Office Markdown");
     private final JTextField query = new JTextField(26);
-    private final JButton recommendSlides = new JButton("AI로 슬라이드 찾기");
-    private final JPanel slideAction = LibraryStyle.panel(new BorderLayout(8,0),0);
+    private final JButton chatWithResults = new JButton("이 결과로 대화하기");
+    private final JPanel chatAction = LibraryStyle.panel(new BorderLayout(8,0),0);
     private List<String> resultNotes = List.of();
     private final ReferencePanel referencePanel = new ReferencePanel(hit -> open(hit, false, false));
     private final JComboBox<SearchIndex.Scope> scope = new JComboBox<>(SearchIndex.Scope.values());
@@ -186,7 +186,7 @@ public final class OfficeMarkdown {
             scope.setSelectedItem(hit.picture() == null ? SearchIndex.Scope.ALL : SearchIndex.Scope.IMAGE);
             (hit.picture() == null ? keywordMode : imageMode).setSelected(true);
             views.show(searchViews,"local");
-            invalidateRecommendations();
+            invalidateResultScope();
             updateReferenceContext();
             cancelSearch();
             readingCard = true;
@@ -329,17 +329,12 @@ public final class OfficeMarkdown {
         localSearch.add(searchBox, BorderLayout.NORTH);
         localSearch.add(contents);
         var referenceArea = LibraryStyle.panel(new BorderLayout(0,4),0);
-        String slideHelp = "검색된 PPT에서 검색어에 맞는 슬라이드를 최대 3장 미리 보여줍니다.";
-        var slideHint = LibraryStyle.label(slideHelp, 13, false, LibraryStyle.MUTED);
-        slideHint.setLabelFor(recommendSlides);
-        recommendSlides.getAccessibleContext().setAccessibleDescription(slideHelp);
-        recommendSlides.setToolTipText("검색어와 후보 슬라이드의 텍스트를 연결된 AI에 보냅니다.");
-        recommendSlides.addActionListener(e -> recommendFromResults());
-        slideAction.add(recommendSlides,BorderLayout.WEST);
-        slideAction.add(slideHint);
-        slideAction.setVisible(false);
-        referenceArea.add(slideAction,BorderLayout.NORTH);
-        referenceArea.add(referencePanel);
+        chatWithResults.setToolTipText("검색어와 결과 문서를 에이전트 대화로 가져옵니다. 보낼 때까지 검색을 실행하지 않습니다.");
+        chatWithResults.addActionListener(e -> discussResults());
+        chatAction.add(chatWithResults,BorderLayout.WEST);
+        chatAction.setVisible(false);
+        referenceArea.add(chatAction,BorderLayout.NORTH);
+
         localSearch.add(referenceArea, BorderLayout.SOUTH);
         searchViews.add(localSearch, "local");
         searchViews.add(agentDialog, "agent");
@@ -473,7 +468,7 @@ public final class OfficeMarkdown {
         syncIndex.setToolTipText("Markdown 폴더의 변경 내용을 색인에 반영합니다.");
         LibraryStyle.button(syncIndex, false);
         syncIndex.addActionListener(e -> {
-            invalidateRecommendations();
+            invalidateResultScope();
             startIndexSync();
         });
         JPanel indexActions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT, 6, 0), 0);
@@ -532,7 +527,7 @@ public final class OfficeMarkdown {
             catch (Exception ex) { error(ex); }
         });
         scope.addActionListener(e -> {
-            invalidateRecommendations();
+            invalidateResultScope();
             boolean nextPicture = scope.getSelectedItem() == SearchIndex.Scope.IMAGE;
             if (!nextPicture) keywordScope = (SearchIndex.Scope)scope.getSelectedItem();
             if (nextPicture != pictureInput) {
@@ -549,13 +544,13 @@ public final class OfficeMarkdown {
             if (search.isEnabled() && !agentMode.isSelected()) refresh("");
         });
         mode.addActionListener(e -> {
-            invalidateRecommendations();
+            invalidateResultScope();
             if (search.isEnabled()) refresh("");
         });
         query.getDocument().addDocumentListener(new DocumentListener() {
-            public void insertUpdate(DocumentEvent e) { invalidateRecommendations(); }
-            public void removeUpdate(DocumentEvent e) { invalidateRecommendations(); }
-            public void changedUpdate(DocumentEvent e) { invalidateRecommendations(); }
+            public void insertUpdate(DocumentEvent e) { invalidateResultScope(); }
+            public void removeUpdate(DocumentEvent e) { invalidateResultScope(); }
+            public void changedUpdate(DocumentEvent e) { invalidateResultScope(); }
         });
         query.addActionListener(e -> { if (search.isEnabled()) submitQuery(); });
         query.putClientProperty("JTextField.clearCallback",(java.util.function.Consumer<JTextField>)field -> {
@@ -969,25 +964,25 @@ public final class OfficeMarkdown {
         refresh("");
     }
 
-    private void recommendFromResults() {
-        if (!slideAction.isVisible() || resultNotes.isEmpty()) return;
-        var notes = resultNotes;
-        String question = displayedSearch.needle();
-        var provider = AgentConnection.preferred();
-        var reader = ReferenceSearch.reader(provider,AgentConnection.model(provider),AgentConnection.effort(provider),usage -> {});
-        referencePanel.search(progress -> ReferenceSearch.evaluate(question,null,reader,progress,notes).recommended());
+    private void discussResults() {
+        if (!chatAction.isVisible() || resultNotes.isEmpty()) return;
+        var notes=resultNotes;
+        String draft=displayedSearch.needle();
+        if(agentDialog.isAnswering()){JOptionPane.showMessageDialog(frame,"현재 대화의 응답이 끝난 뒤 결과를 가져올 수 있습니다.");return;}
+        agentMode.doClick();
+        agentDialog.useResults(notes,draft);
     }
 
-    private void invalidateRecommendations() {
+    private void invalidateResultScope() {
         resultNotes = List.of();
-        slideAction.setVisible(false);
-        referencePanel.clearSearch();
+        chatAction.setVisible(false);
+
     }
 
     private void updateReferenceContext() {
         boolean available = !working && keywordMode.isSelected() && scope.getSelectedItem()!=SearchIndex.Scope.IMAGE;
-        referencePanel.setAvailable(available);
-        slideAction.setVisible(available && !resultNotes.isEmpty());
+
+        chatAction.setVisible(available && !resultNotes.isEmpty());
     }
 
     private void refresh(String summary) {
@@ -1006,7 +1001,7 @@ public final class OfficeMarkdown {
     }
 
     private void searchCached(SearchRequest request, String summary) {
-        invalidateRecommendations();
+        invalidateResultScope();
         cancelSearch();
         lastSearch = request;
         lastSearchSummary = summary;
@@ -1043,7 +1038,7 @@ public final class OfficeMarkdown {
         displayedSearch = request;
         if (!request.brokenOcr() && request.scope()!=SearchIndex.Scope.IMAGE && !request.needle().isBlank()
                 && request.needle().equals(query.getText()) && request.scope()==scope.getSelectedItem()) {
-            resultNotes=hits.stream().filter(hit -> hit.source().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".pptx"))
+            resultNotes=hits.stream()
                     .map(hit -> hit.md().toAbsolutePath().normalize().toString()).distinct().toList();
         } else resultNotes=List.of();
         updateReferenceContext();
