@@ -12,7 +12,7 @@ Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri 'https://raw.githubuse
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup
 ```
 
-직접 설치하려면 [최신 릴리즈](https://github.com/dlgorbs12-rrr/OfficeMarkdown/releases/latest)에서 `.msi` 파일을 받으세요. 3.3에서는 앱의 **도움말 → 업데이트 확인**, 이전 버전에서는 **업데이트 → 업데이트 확인**에서 새 버전을 설치할 수 있습니다.
+직접 설치하려면 [최신 릴리즈](https://github.com/dlgorbs12-rrr/OfficeMarkdown/releases/latest)에서 `.msi` 파일을 받으세요. 3.3에서는 앱의 **도움말 → 업데이트 확인**, 2.7~3.2에서는 **업데이트 → 업데이트 확인**에서 새 버전을 설치할 수 있습니다.
 
 ## PowerPoint에서 다시 쓸 슬라이드 찾기
 
