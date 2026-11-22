@@ -24,6 +24,7 @@ class ShapeTextTest {
              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
              xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
              xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+             xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
              xmlns:v="urn:schemas-microsoft-com:vml"
              xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math\"""";
 
@@ -72,6 +73,29 @@ class ShapeTextTest {
         assertTrue(markdown.contains("가용성\n\nA=MTBF/(MTBF+MTTR)"), markdown);
         // A drawing placed directly in a run is already in the paragraph text through POI and must not repeat.
         assertEquals(1, count(markdown, "표 안 도형"), markdown);
+    }
+
+    @Test void paragraphLevelGroupAndStandaloneVmlAreSearchableOnce() throws Exception {
+        Path source = root.resolve("shapes.docx");
+        String group = "<wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr/>"
+                + textBox("그룹도형") + textBox("검색대상") + "</wpg:wgp>";
+        String choice = "<mc:AlternateContent><mc:Choice Requires='wpg'><w:r>" + drawing(group)
+                + "</w:r></mc:Choice><mc:Fallback/></mc:AlternateContent>";
+        String vml = "<w:r><w:pict><v:rect><v:textbox><w:txbxContent><w:p><w:r><w:t>단독상자</w:t>"
+                + "</w:r></w:p></w:txbxContent></v:textbox></v:rect></w:pict></w:r>";
+        try (var document = new XWPFDocument(); var output = Files.newOutputStream(source)) {
+            document.createParagraph().getCTP().set(paragraph(choice));
+            document.createParagraph().getCTP().set(paragraph(vml));
+            document.write(output);
+        }
+        Path library = root.resolve("lib");
+        Path converted = Library.convert(source, library);
+        String markdown = Files.readString(converted);
+        SearchIndex.indexCompleted(library, java.util.List.of(converted));
+        for (String term : java.util.List.of("그룹도형", "검색대상", "단독상자")) {
+            assertEquals(1, count(markdown, term), markdown);
+            assertFalse(SearchIndex.search(library, term, SearchIndex.Scope.CONTENT, 10).isEmpty(), term);
+        }
     }
 
     @Test void excelShapeTextIncludingGroupsIsConvertedAheadOfTheCells() throws Exception {

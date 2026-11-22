@@ -18,19 +18,19 @@ final class ShapeText {
      */
     static List<String> textBoxes(Node node) {
         var boxes = new ArrayList<String>();
-        textBoxes(node, boxes);
+        textBoxes(node, boxes, false);
         return boxes;
     }
 
-    private static void textBoxes(Node node, List<String> boxes) {
+    private static void textBoxes(Node node, List<String> boxes, boolean insideChoice) {
         for (Node child = node.getFirstChild(); child != null; child = child.getNextSibling()) {
             if (child.getNodeType() != Node.ELEMENT_NODE || is(child, COMPATIBILITY, "Fallback")) continue;
-            if ((is(child, WORD, "drawing") || is(child, WORD, "pict")) && is(node, WORD, "r")) continue;
+            if (!insideChoice && is(node, WORD, "r") && (is(child, WORD, "drawing") || is(child, WORD, "pict"))) continue;
             if (is(child, WORD, "txbxContent")) {
                 String text = paragraphs(child, WORD);
                 if (!text.isEmpty()) boxes.add(text);
             } else {
-                textBoxes(child, boxes);
+                textBoxes(child, boxes, insideChoice || is(child, COMPATIBILITY, "Choice"));
             }
         }
     }
