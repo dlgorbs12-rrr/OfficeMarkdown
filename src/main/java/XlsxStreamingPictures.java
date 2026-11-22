@@ -21,6 +21,7 @@ import org.openxmlformats.schemas.drawingml.x2006.spreadsheetDrawing.CTGroupShap
 import org.openxmlformats.schemas.drawingml.x2006.spreadsheetDrawing.CTMarker;
 import org.openxmlformats.schemas.drawingml.x2006.spreadsheetDrawing.CTOneCellAnchor;
 import org.openxmlformats.schemas.drawingml.x2006.spreadsheetDrawing.CTPicture;
+import org.openxmlformats.schemas.drawingml.x2006.spreadsheetDrawing.CTShape;
 import org.openxmlformats.schemas.drawingml.x2006.spreadsheetDrawing.CTTwoCellAnchor;
 import org.xml.sax.Attributes;
 
@@ -38,23 +39,25 @@ final class XlsxStreamingPictures {
         try (InputStream in = drawing.getInputStream()) {
             anchors = CTDrawing.Factory.parse(in, XML_OPTIONS);
         }
-        writeAnchors(anchors, drawing, geometry, sheetName, pictures, out);
+        var texts = new java.util.ArrayList<String>();
+        writeAnchors(anchors, drawing, geometry, sheetName, pictures, texts, out);
+        for (String text : texts) out.write(Library.plain(text) + "\n\n");
     }
 
     private static void writeAnchors(CTDrawing anchors, PackagePart drawing, Geometry geometry, String sheet,
-                                     PictureAssets pictures, Writer out) throws IOException, InvalidFormatException, XmlException {
+                                     PictureAssets pictures, java.util.List<String> texts, Writer out) throws IOException, InvalidFormatException, XmlException {
         try (var cursor = anchors.newCursor()) {
             if (!cursor.toFirstChild()) return;
             do {
                 var child = cursor.getObject();
                 if (child instanceof CTTwoCellAnchor || child instanceof CTOneCellAnchor || child instanceof CTAbsoluteAnchor) {
-                    writeShapes(child, drawing, geometry, sheet, pictures, out);
+                    writeShapes(child, drawing, geometry, sheet, pictures, texts, out);
                 } else if (cursor.getName() != null && COMPATIBILITY_NS.equals(cursor.getName().getNamespaceURI())
                         && "AlternateContent".equals(cursor.getName().getLocalPart())) {
                     cursor.push();
                     if (cursor.toFirstChild()) {
                         writeAnchors(CTDrawing.Factory.parse(cursor.newXMLStreamReader(), XML_OPTIONS),
-                                drawing, geometry, sheet, pictures, out);
+                                drawing, geometry, sheet, pictures, texts, out);
                     }
                     cursor.pop();
                 }
@@ -63,13 +66,19 @@ final class XlsxStreamingPictures {
     }
 
     private static void writeShapes(XmlObject parent, PackagePart drawing, Geometry geometry, String sheet,
-                                    PictureAssets pictures, Writer out) throws IOException, InvalidFormatException {
+                                    PictureAssets pictures, java.util.List<String> texts, Writer out) throws IOException, InvalidFormatException {
         try (var cursor = parent.newCursor()) {
             if (!cursor.toFirstChild()) return;
             do {
                 var shape = cursor.getObject();
                 if (shape instanceof CTGroupShape group) {
-                    writeShapes(group, drawing, geometry, sheet, pictures, out);
+                    writeShapes(group, drawing, geometry, sheet, pictures, texts, out);
+                } else if (shape instanceof CTShape drawn) {
+                    // Shape text is collected and written after the pictures, ahead of the cell table.
+                    if (drawn.getTxBody() != null) {
+                        String text = ShapeText.paragraphs(drawn.getTxBody().getDomNode(), ShapeText.DRAWING);
+                        if (!text.isEmpty()) texts.add(text);
+                    }
                 } else if (shape instanceof CTPicture picture) {
                     var fill = picture.getBlipFill();
                     if (fill == null || fill.getBlip() == null) continue;

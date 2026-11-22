@@ -47,6 +47,7 @@ final class WordConversion {
                             out.write("    ".repeat(level)+marker+Library.plain(text)+"\n");
                         }else writeParagraph(text,out);
                     }
+                    writeShapeText(paragraph, out);
                     writePictures(paragraph, section, pictures, out);
                 } else if (item instanceof XWPFTable table) {
                     writeTable(table, out);
@@ -119,11 +120,20 @@ final class WordConversion {
         for (var row : table.getRows()) {
             for (var cell : row.getTableCells()) {
                 for (IBodyElement item : cell.getBodyElements()) {
-                    if (item instanceof XWPFParagraph paragraph) writePictures(paragraph, section, pictures, out);
-                    else if (item instanceof XWPFTable nested) writeTablePictures(nested, section, pictures, out);
+                    if (item instanceof XWPFParagraph paragraph) {
+                        writeShapeText(paragraph, out);
+                        writePictures(paragraph, section, pictures, out);
+                    } else if (item instanceof XWPFTable nested) writeTablePictures(nested, section, pictures, out);
                 }
             }
         }
+    }
+
+    // Text boxes, canvas shapes and equations sit in the paragraph XML but not in XWPFParagraph.getText().
+    private static void writeShapeText(XWPFParagraph paragraph, Writer out) throws IOException {
+        var node = paragraph.getCTP().getDomNode();
+        for (String box : ShapeText.textBoxes(node)) writeParagraph(box, out);
+        for (String equation : ShapeText.equations(node)) writeParagraph(equation, out);
     }
 
     private static void writePictures(XWPFParagraph paragraph, String section, PictureAssets pictures, Writer out)
