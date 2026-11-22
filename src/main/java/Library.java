@@ -74,18 +74,7 @@ final class Library {
                         int number = 0;
                         for (Slide<?, ?> slide : show.getSlides()) {
                             out.write("\n## 슬라이드 " + (++number) + "\n\n");
-                            shapes(slide.getShapes(), out, pictures, "슬라이드 "+number);
-                            Notes<?, ?> notes = slide.getNotes();
-                            if (notes != null) {
-                                for (var paragraphs : notes.getTextParagraphs()) {
-                                    for (Object item : paragraphs) {
-                                        if (!(item instanceof TextParagraph<?, ?, ?> paragraph)) continue;
-                                        StringBuilder line = new StringBuilder();
-                                        for (TextRun run : paragraph.getTextRuns()) line.append(run.getRawText());
-                                        if (!line.toString().isBlank()) out.write("발표 노트 · " + plain(line.toString()) + "\n");
-                                    }
-                                }
-                            }
+                            writeSlide(slide,out,pictures,"슬라이드 "+number);
                         }
                     }
                 }
@@ -94,6 +83,21 @@ final class Library {
             pictures.publish(temp);
             return target;
         } finally { Files.deleteIfExists(temp); }
+    }
+
+    static void writeSlide(Slide<?,?> slide,Writer out,PictureAssets pictures,String section) throws IOException {
+        shapes(slide.getShapes(), out, pictures, section);
+        Notes<?, ?> notes = slide.getNotes();
+        if (notes != null) {
+            for (var paragraphs : notes.getTextParagraphs()) {
+                for (Object item : paragraphs) {
+                    if (!(item instanceof TextParagraph<?, ?, ?> paragraph)) continue;
+                    StringBuilder line = new StringBuilder();
+                    for (TextRun run : paragraph.getTextRuns()) line.append(run.getRawText());
+                    if (!line.toString().isBlank()) out.write("발표 노트 · " + plain(line.toString()) + "\n");
+                }
+            }
+        }
     }
 
     static String plain(String text) {
@@ -129,7 +133,7 @@ final class Library {
                 for (String field : new LinkedHashSet<>(Arrays.asList(props.getTitle(), props.getDescr()))) {
                     if (field != null && !field.isBlank()) out.write("그림 · " + plain(field) + "\n\n");
                 }
-                var data = picture.getPictureData();
+                var data = pictures==null ? null : picture.getPictureData();
                 if (data != null) pictures.write(data.getData(), data.getType().name(), section, section + " · " + picture.getShapeName(), out);
             } else if (shape instanceof GroupShape<?, ?> group) shapes(group.getShapes(), out, pictures, section);
             else if (shape instanceof TextShape<?, ?> text && !text.getText().isBlank()) {
