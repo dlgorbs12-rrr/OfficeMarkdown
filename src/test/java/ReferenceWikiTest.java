@@ -20,6 +20,23 @@ import static org.junit.jupiter.api.Assertions.*;
 class ReferenceWikiTest {
     @TempDir Path directory;
 
+    @Test void previewResolvesMissingHangulFontAndPreservesExplicitRuns() throws Exception {
+        var east=org.apache.poi.common.usermodel.fonts.FontGroup.EAST_ASIAN;
+        var latin=org.apache.poi.common.usermodel.fonts.FontGroup.LATIN;
+        org.junit.jupiter.api.Assumptions.assumeTrue(new java.awt.Font("Malgun Gothic",0,12).canDisplay('한'));
+        try(var deck=new XMLSlideShow()){
+            var shape=deck.createSlide().createTextBox();
+            var para=shape.addNewTextParagraph();
+            var missing=para.addNewTextRun();missing.setText("시스템 구성");missing.setFontFamily("Malgun Gothic",latin);
+            var explicit=para.addNewTextRun();explicit.setText("사용자");explicit.setFontFamily("Gulim",east);
+            var english=para.addNewTextRun();english.setText("system");
+            assertNull(missing.getFontFamily(east));
+            ReferenceWiki.resolveHangulFonts(shape);
+            assertEquals("Malgun Gothic",missing.getFontFamily(east));
+            assertEquals("Gulim",explicit.getFontFamily(east));
+            assertNull(english.getFontFamily(east));
+        }
+    }
     @Test void rendersAndDescribesTheConvertedSlideOrder() throws Exception {
         Path source = directory.resolve("순서 검증.pptx");
         writeDeck(source, true, Color.RED, Color.BLUE);

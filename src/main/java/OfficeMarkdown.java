@@ -1199,7 +1199,8 @@ public final class OfficeMarkdown {
             emptyHint.setText("현재 색인에서 깨짐이 의심되는 글자 인식 결과를 찾지 못했습니다.");
             emptyButton.setText("전체 문서 보기");
             showHits(displayed, previous);
-            status.setText(summary + (displayed.isEmpty() ? " " : "그림을 선택하면 점검 이유가 표시됩니다. 후보 전체를 한 번에 정밀 OCR할 수 있습니다."));
+            searchStatus=summary + (displayed.isEmpty() ? " " : "그림을 선택하면 점검 이유가 표시됩니다. 후보 전체를 한 번에 정밀 OCR할 수 있습니다.");
+            status.setText(searchStatus);
             return;
         }
         boolean pictures = request.scope() == SearchIndex.Scope.IMAGE;

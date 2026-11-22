@@ -201,7 +201,11 @@ final class MarkdownReader {
             }
             rendered=parsed.body().html();
         }
-        String safe = collapseEmptyColumns(Jsoup.clean(rendered,allowedTags()));
+        String safe=Jsoup.clean(rendered,allowedTags());
+        if(note!=null && page.section().startsWith("시트 · ")
+                && note.getFileName().toString().matches("(?i).+\\.xlsx?-[0-9a-f]{20}\\.md")){
+            safe=collapseEmptyColumns(safe);
+        }
         for(var image:trusted.entrySet())safe=safe.replace(image.getKey(),image.getValue());
         if (marker != null) safe = safe.replace(marker, "<a name='" + PICTURE_ANCHOR + "'></a>");
         return "<html><head><style>body {font-family:'Malgun Gothic';font-size:12pt;color:#25251f;margin:16px 20px}"
@@ -222,7 +226,8 @@ final class MarkdownReader {
         document.outputSettings().prettyPrint(false);
         for (var table : document.select("table")) {
             var rows = table.select("tr");
-            if (rows.isEmpty() || !rows.getFirst().child(0).text().equals("행")) continue;
+            if(rows.isEmpty() || rows.getFirst().childrenSize()<2 || !rows.getFirst().child(0).text().equals("행"))continue;
+            if(rows.getFirst().children().stream().skip(1).anyMatch(cell->!cell.text().matches("[A-Z]{1,3}")))continue;
             int columns = rows.getFirst().childrenSize();
             var removed = new ArrayList<String>();
             for (int column = columns - 1; column >= 1; column--) {
