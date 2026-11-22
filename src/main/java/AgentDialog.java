@@ -35,6 +35,9 @@ final class AgentDialog extends JPanel {
     private DocumentAgent.Claim selected;
     private final JPanel detail=new JPanel(new BorderLayout());
     private final JSplitPane results=new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+    private final CardLayout sideLayout=new CardLayout();
+    private final JPanel sidebar=new SearchStudio.Round(sideLayout,20,Color.WHITE,LibraryStyle.LINE,1);
+    private final ChatDocuments documents=new ChatDocuments(this::showSelected);
     private final JButton scopeChip=new JButton("전체 문서");
 
     private SearchIndex.Focus focus;
@@ -62,6 +65,7 @@ final class AgentDialog extends JPanel {
         newChat.addActionListener(e->{
             conversation.removeAll();
             history.clear();
+            documents.clear();
             hidePreview();
             setFocus(null,false);
             question.setText("");
@@ -102,18 +106,27 @@ final class AgentDialog extends JPanel {
         threadScroll.setPreferredSize(new Dimension(430,320));
         threadScroll.setBorder(null);
 
-        var closePreview=new JButton("미리보기 닫기");
+        var closePreview=new JButton("‹  문서 목록");
+        LibraryStyle.button(closePreview,false);
         closePreview.addActionListener(e->hidePreview());
-        var detailHeader=new JPanel(new BorderLayout());
-        detailHeader.add(closePreview,BorderLayout.EAST);detailHeader.add(image,BorderLayout.SOUTH);
+        var detailHeader=LibraryStyle.panel(new BorderLayout(8,0),0);
+        detailHeader.add(closePreview,BorderLayout.WEST);
+        detailHeader.add(LibraryStyle.label("미리보기",16,true,LibraryStyle.INK),BorderLayout.EAST);
+        detail.setOpaque(false);
         detail.add(detailHeader,BorderLayout.NORTH);
-        detail.add(new JScrollPane(answer),BorderLayout.CENTER);
-        var buttons=new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        var readerScroll=new JScrollPane(answer);
+        readerScroll.setColumnHeaderView(image);
+        readerScroll.getColumnHeader().setBackground(Color.WHITE);
+        readerScroll.setBorder(BorderFactory.createMatteBorder(1,0,1,0,LibraryStyle.LINE));
+        readerScroll.getViewport().setBackground(Color.WHITE);
+        readerScroll.getVerticalScrollBar().setUnitIncrement(18);
+        detail.add(readerScroll,BorderLayout.CENTER);
+        var buttons=LibraryStyle.panel(new GridLayout(0,2,4,4),0);
         var scopeDoc=new JButton("이 문서에서 대화");
         scopeDoc.addActionListener(e->{if(selected!=null)setFocus(selected.proof(),false);hidePreview();focusQuestion();});
         var scopeSection=new JButton("이 구역에서 대화");
         scopeSection.addActionListener(e->{if(selected!=null)setFocus(selected.proof(),true);hidePreview();focusQuestion();});
-        buttons.setLayout(new GridLayout(0,2,4,4));
+        for (var button:List.of(scopeDoc,scopeSection,position,original)) LibraryStyle.button(button,false);
         buttons.add(scopeDoc);buttons.add(scopeSection);buttons.add(position);buttons.add(original);detail.add(buttons,BorderLayout.SOUTH);
         original.setEnabled(false);position.setEnabled(false);
 
@@ -122,9 +135,15 @@ final class AgentDialog extends JPanel {
             var c=selected;
             if(c!=null)actOnCurrent(c,preview);
         });
-        detail.setBorder(BorderFactory.createTitledBorder("선택한 출처 미리보기"));
-        results.setLeftComponent(threadScroll);hidePreview();
-        results.setResizeWeight(0.52);
+        sidebar.setBorder(BorderFactory.createEmptyBorder(12,12,12,12));
+        sidebar.setPreferredSize(new Dimension(360,320));
+        sidebar.setMinimumSize(new Dimension(245,120));
+        sidebar.add(documents,"list");
+        sidebar.add(detail,"preview");
+        results.setLeftComponent(threadScroll);
+        results.setRightComponent(sidebar);
+        results.setDividerSize(8);
+        results.setResizeWeight(0.65);
         result.add(results);body.add(result);
         var composer=new SearchStudio.Round(new BorderLayout(0,8),22,Color.WHITE,LibraryStyle.LINE,2);
         composer.setBorder(BorderFactory.createEmptyBorder(10,14,12,14));
@@ -148,7 +167,7 @@ final class AgentDialog extends JPanel {
         var canvas=new JPanel(new BorderLayout()){
             public void doLayout(){
                 super.doLayout();
-                int width=Math.min(getWidth(),results.getRightComponent()==null?960:1280);
+                int width=Math.min(getWidth(),1280);
                 body.setBounds((getWidth()-width)/2,0,width,getHeight());
             }
         };
@@ -260,14 +279,7 @@ final class AgentDialog extends JPanel {
             }
         });
         body.add(message);
-        for(var source:reply.sources()){
-            var link=new JButton("["+source.answer()+"] "+source.proof().title()+" · "+source.proof().section());
-            link.setIcon(LibraryStyle.document("",20,new Color(0x777A46)));
-            LibraryStyle.button(link,false);link.setBackground(new Color(0xF3EFE5));
-            link.putClientProperty("html.disable",true);
-            link.addActionListener(e->showSelected(source));
-            body.add(link);
-        }
+        documents.append(reply.sources());
     }
 
     static String relevanceHtml(DocumentAgent.Claim claim,boolean expanded){
@@ -316,7 +328,9 @@ final class AgentDialog extends JPanel {
 
     private void hidePreview(){
         if(previewTask!=null)previewTask.cancel(true);
-        results.setRightComponent(null);results.setDividerSize(0);revalidate();
+        selected=null;
+        sideLayout.show(sidebar,"list");
+        documents.focusList();
     }
 
     private record Detail(String html, BufferedImage picture) {}
@@ -340,11 +354,14 @@ final class AgentDialog extends JPanel {
         original.setEnabled(claim!=null);position.setEnabled(claim!=null);
         if(claim==null){answer.setText("");return;}
         var hit=claim.proof();
-        results.setRightComponent(detail);results.setDividerSize(8);results.setDividerLocation(0.52);revalidate();
-        String heading="<html><body><h3>"+Entities.escape(hit.title())+"</h3><p>"
-                +Entities.escape(hit.source().toString())+"<br>"+Entities.escape(hit.section())+"</p>";
+        sideLayout.show(sidebar,"preview");
+        String heading="<html><head><style>body{font-family:'Malgun Gothic';font-size:11pt;color:#25251f;margin:10px}"
+                +"h2{font-size:15pt;margin:0 0 5px} .section{color:#b74323;font-weight:bold}"
+                +".path{color:#706e62;font-size:9pt} blockquote{background:#fbf8f3;margin:10px 0;padding:8px}"
+                +"</style></head><body><h2>"+Entities.escape(hit.title())+"</h2><div class='section'>"
+                +Entities.escape(hit.section())+"</div><div class='path'>"+Entities.escape(hit.source().toString())+"</div>";
         String excerpt=claim.page()!=null && !claim.evidence().isEmpty() ? claim.evidence().getFirst().quote() : hit.excerpt();
-        String evidence=heading+"<p>"+Entities.escape(excerpt)+"</p>";
+        String evidence=heading+"<blockquote>"+Entities.escape(excerpt)+"</blockquote>";
         answer.setText(evidence+"</body></html>");answer.setCaretPosition(0);
         var loader=new SwingWorker<Detail,Void>() {
             protected Detail doInBackground() throws Exception {
@@ -365,7 +382,7 @@ final class AgentDialog extends JPanel {
                     Detail detail=get();
                     if(detail.picture()!=null){
                         var bitmap=detail.picture();
-                        double scale=Math.min(1,Math.min(480d/bitmap.getWidth(),220d/bitmap.getHeight()));
+                        double scale=Math.min(1,Math.min(Math.max(120,sidebar.getWidth()-64)/(double)bitmap.getWidth(),220d/bitmap.getHeight()));
                         image.setIcon(new ImageIcon(bitmap.getScaledInstance(Math.max(1,(int)(bitmap.getWidth()*scale)),
                                 Math.max(1,(int)(bitmap.getHeight()*scale)),Image.SCALE_SMOOTH)));
                     }
