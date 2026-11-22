@@ -59,7 +59,7 @@ class PmReferenceTest {
 
     @Test void chatFindsNamedAdapterDesignsWithoutGenericOrSlideResults() throws Exception {
         String query="AD 어댑터 설계 초본을 만들기 위한 자료 탐색";
-        note("AD Adaptor 설계서","## 계정 매핑\n| 컬럼명 | Mapping |\n");
+        note("교육청 AD Adaptor 설계서","## 계정 매핑\n| 컬럼명 | Mapping |\n");
         note("Active Directory 어댑터 설계서","## 조직\n| 필드명 | Mapping |\n");
         note("메일 Adaptor 설계서","## 설정\nAD와 별도 운영\n");
         note("AD 어댑터 설계 교육 가이드","## 교육 일정\n설계서 작성 교육 소개\n");

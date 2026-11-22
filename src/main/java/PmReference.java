@@ -143,7 +143,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                 while(rs.next()){
                     String name=rs.getString(3),section=rs.getString(4),line=rs.getString(5);
                     String body=fold(line),heading=fold(section),file=fold(name);
-                    if(requireTarget && SUPPORTING_MATERIAL.matcher(file).find())continue;
+                    if(requireTarget && file.contains("설계") && SUPPORTING_MATERIAL.matcher(file.substring(file.indexOf("설계")+2)).find())continue;
                     int fileIds=0,rowIds=0;
                     for(String id:identifiers){
                         if(identifies(id,name,file,idPatterns))fileIds++;
