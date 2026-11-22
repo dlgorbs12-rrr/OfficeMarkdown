@@ -66,6 +66,7 @@ final class ReferenceSearch {
             전체 문서·이미지를 본 것으로 추측하지 마세요. 외부 도구를 사용하지 마세요.
             """+"질문: "+question+"\n후보: "+OfficeIndexMcp.JSON.toJson(input)));
         var checked=validate(reply,inspected);
+        if(checked.isEmpty() && ranked.unavailable())throw new IOException("현재 범위의 일부 장표를 색인하거나 확인하지 못했습니다.");
         for(var item:checked)if(!ReferenceIndex.current(item.page()))throw new IOException("검토 도중 원본이 변경되었습니다. 다시 검색하세요.");
         return new Trace(candidates,List.copyOf(inspected),checked);
     }

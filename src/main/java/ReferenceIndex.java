@@ -416,9 +416,18 @@ final class ReferenceIndex {
                     }
                 }
             }
-            return List.of(new SearchResult(List.copyOf(result), files.unavailable));
+            return List.of(new SearchResult(List.copyOf(result), files.unavailable || pendingInScope(db,focus)));
         });
         return results.isEmpty() ? empty : results.getFirst();
+    }
+
+    private static boolean pendingInScope(Connection db, SearchIndex.Focus focus) throws SQLException {
+        String sql = "SELECT 1 FROM reference_legacy_queue q JOIN visible_docs d ON d.id=q.doc"
+                + (focus == null ? "" : " WHERE d.md=?") + " LIMIT 1";
+        try (var statement = db.prepareStatement(sql)) {
+            if (focus != null) statement.setString(1, focus.md().toAbsolutePath().normalize().toString());
+            try (var rows = statement.executeQuery()) { return rows.next(); }
+        }
     }
 
     private static void addRanks(Map<Key, Scored> scores, List<Ranked> ranks) {

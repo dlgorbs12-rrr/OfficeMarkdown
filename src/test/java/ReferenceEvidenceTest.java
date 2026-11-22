@@ -31,6 +31,16 @@ class ReferenceEvidenceTest {
         assertThrows(java.io.IOException.class, () -> ReferenceSearch.validate(fake, List.of(original)));
     }
 
+    @Test void unpreparedLegacySourceAffectsOnlyItsVisibleScope() throws Exception {
+        var note = folder.resolve("old.md");
+        var missing = folder.resolve("missing.pptx");
+        Files.writeString(note, "# Old\n\n[원본 파일 열기](<" + missing.toUri() + ">)\n\n## 슬라이드 1\nold\n");
+        SearchIndex.indexCompleted(folder, List.of(note));
+        ReferenceIndex.prepare();
+        assertTrue(ReferenceIndex.searchDetailed("없는장표", new SearchIndex.Focus(note, null)).unavailable());
+        assertFalse(ReferenceIndex.searchDetailed("없는장표", new SearchIndex.Focus(folder.resolve("other.md"), null)).unavailable());
+    }
+
     @Test void routesOrdinaryReferenceQuestionsAndPreservesExactLookups() {
         assertTrue(ReferenceSearch.requested("시스템 구성도 잘된 거 찾아줘"));
         assertTrue(ReferenceSearch.requested("전체 서비스가 어떻게 연결되는지 한 장이 필요해"));
