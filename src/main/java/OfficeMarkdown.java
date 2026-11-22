@@ -653,7 +653,10 @@ public final class OfficeMarkdown {
         if(picture && resultView==ResultView.BROKEN_OCR)location+=" · "+OcrRepair.qualityReason(hit.excerpt(),hit.picture().location());
         sectionLabel.setText(location);
         pathText.setText(hit.source().toString()); pathText.setCaretPosition(0);
-        preview.setText(hit.displayExcerpt()); highlight(); preview.setCaretPosition(0);
+        String excerpt=hit.displayExcerpt();
+        if(!hit.otherSources().isEmpty())
+            excerpt+="\n\n다른 사본·버전\n"+String.join("\n",hit.otherSources().stream().map(Path::toString).toList());
+        preview.setText(excerpt); highlight(); preview.setCaretPosition(0);
         viewer.setText("문서를 불러오는 중…");
         if (picture) loadPicture(hit);
         roleButton.setText("문서 역할");

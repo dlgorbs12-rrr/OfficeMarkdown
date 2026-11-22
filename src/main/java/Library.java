@@ -217,7 +217,10 @@ final class Library {
         }
     }
 
-    record Hit(Path md, Path source, String title, String section, String excerpt, PictureAssets.Reference picture, String imageDescription,String additionalOcr) {
+    record Hit(Path md, Path source, String title, String section, String excerpt, PictureAssets.Reference picture, String imageDescription,String additionalOcr,List<Path> otherSources) {
+        Hit(Path md,Path source,String title,String section,String excerpt,PictureAssets.Reference picture,String imageDescription,String additionalOcr){
+            this(md,source,title,section,excerpt,picture,imageDescription,additionalOcr,List.of());
+        }
         String displayExcerpt(){
             String text=additionalOcr.isEmpty()?excerpt:"검색용 OCR · "+additionalOcr;
             return imageDescription.isEmpty()?text:"그림 설명 · "+imageDescription+"\n"+text;

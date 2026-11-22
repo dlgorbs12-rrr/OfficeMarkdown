@@ -141,6 +141,27 @@ final class LatestVersionSelection {
         return a.date() == null ? 0 : a.date().value().compareTo(b.date().value());
     }
 
+    static String searchFamily(Path path) {
+        if (path.getFileName()==null || !path.getFileName().toString().contains(".")) return path.toString();
+        Key key=name(path);
+        Revision revision=revision(key.stem);
+        return (revision==null || revision.ambiguous ? key.stem : revision.stem) + "." + key.extension;
+    }
+
+    static int compareSearchVersions(Path a,Path b) {
+        Revision left=revision(searchStem(a)), right=revision(searchStem(b));
+        if(left==null || right==null || left.ambiguous || right.ambiguous
+                || (left.version==null)!=(right.version==null) || (left.date==null)!=(right.date==null)) return 0;
+        int version=compareVersions(left,right);
+        return version!=0 ? version : compareDates(left,right);
+    }
+
+    private static String searchStem(Path path) {
+        String filename=path.getFileName().toString();
+        int dot=filename.lastIndexOf('.');
+        return (dot<0?filename:filename.substring(0,dot)).toLowerCase(Locale.ROOT);
+    }
+
     private static Key name(Path path) {
         String filename = path.getFileName().toString();
         int dot = filename.lastIndexOf('.');

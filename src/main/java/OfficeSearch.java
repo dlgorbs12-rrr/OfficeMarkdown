@@ -77,7 +77,7 @@ public final class OfficeSearch {
                 }
             }
             if (limit < 1 || limit > 500) throw new IllegalArgumentException("--limit 1..500");
-            var results = new ArrayList<Map<String,String>>();
+            var results = new ArrayList<Map<String,Object>>();
             if (refreshOutput) SearchIndex.synchronize(library, ignored -> {});
             SearchIndex.importPreviousIndex(SearchIndex.defaultLibrary());
             if (!java.nio.file.Files.exists(SearchIndex.database()))
@@ -88,7 +88,7 @@ public final class OfficeSearch {
                 System.setProperty(SlideSearch.ENABLED,"true");
             }
             for (var hit : SearchIndex.searchCached(library,String.join(" ",terms),scope,mode,limit)) {
-                var result = new LinkedHashMap<>(Map.of("title",hit.title(),"section",hit.section(),"excerpt",hit.excerpt(),
+                var result = new LinkedHashMap<String,Object>(Map.of("title",hit.title(),"section",hit.section(),"excerpt",hit.excerpt(),
                         "markdownPath",hit.md().toString(),"sourcePath",hit.source().toString()));
                 if (hit.picture() != null) {
                     result.put("imagePath",hit.md().getParent().resolve(hit.picture().relativePath()).toString());
@@ -96,6 +96,7 @@ public final class OfficeSearch {
                     if(!hit.additionalOcr().isBlank())result.put("searchOcr",hit.additionalOcr());
                     if(!hit.imageDescription().isBlank())result.put("imageDescription",hit.imageDescription());
                 }
+                if(!hit.otherSources().isEmpty())result.put("otherSources",hit.otherSources().stream().map(Path::toString).toArray(String[]::new));
                 results.add(result);
             }
             System.out.write((new Gson().toJson(results) + "\n").getBytes(StandardCharsets.UTF_8));

@@ -52,7 +52,7 @@ final class ReferenceSearch {
             if(terms.size()==8)break;
         }
         if(Thread.interrupted())throw new InterruptedException();
-        var ranked=ReferenceIndex.searchDetailed(question+" "+String.join(" ",terms),focus,notes);
+        var ranked=ReferenceIndex.searchDetailed(question+" "+String.join(" ",terms),question,focus,notes);
         var candidates=ranked.pages();
         var inspected=new ArrayList<ReferenceIndex.Page>();
         var originals=new HashMap<java.nio.file.Path,ReferenceOriginal.Content>();
