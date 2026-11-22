@@ -10,6 +10,7 @@ class MarkdownReaderTest {
         StringBuilder source=new StringBuilder("# 자료\n\n## 시트 · 일정\n\n| 번호 | 확인 |\n| --- | --- |\n");
         for(int i=1;i<=500;i++) source.append("| "+i+" | **검토 "+i+"** |\n");
         Files.writeString(file,source+"\n## 슬라이드 2\n\n- 항목\n");
+        assertEquals("?? ? ??", MarkdownReader.firstPage(file).section());
         var pages=MarkdownReader.read(file);
         var hit=new Library.Hit(file,file,"자료","시트 · 일정","| 495 | **검토 495** |");
         int index=MarkdownReader.locate(pages,hit);

@@ -147,7 +147,6 @@ final class AgentDialog extends JPanel {
         var pageBody=new JPanel(new BorderLayout());
         pageBody.add(image,BorderLayout.NORTH);pageBody.add(answer);
         var readerScroll=new JScrollPane(pageBody);
-        readerScroll.getColumnHeader().setBackground(Color.WHITE);
         readerScroll.setBorder(BorderFactory.createMatteBorder(1,0,1,0,LibraryStyle.LINE));
         readerScroll.getViewport().setBackground(Color.WHITE);
         readerScroll.getVerticalScrollBar().setUnitIncrement(18);
@@ -450,6 +449,9 @@ final class AgentDialog extends JPanel {
         if(previewWindow==null){
             previewWindow=new JDialog(SwingUtilities.getWindowAncestor(this),"자료 미리보기",Dialog.ModalityType.MODELESS);
             previewWindow.setDefaultCloseOperation(WindowConstants.HIDE_ON_CLOSE);
+            previewWindow.addWindowListener(new java.awt.event.WindowAdapter(){
+                public void windowClosing(java.awt.event.WindowEvent event){documents.focusList();}
+            });
             previewWindow.setContentPane(detail);previewWindow.setSize(940,700);
             previewWindow.setLocationRelativeTo(this);
         }
@@ -648,6 +650,9 @@ final class AgentDialog extends JPanel {
         String text=question.getText().strip();
         if(text.length()>1200){state.setText("질문은 1200자까지 입력할 수 있습니다.");return;}
         if(text.isEmpty()){state.setText("질문을 입력하세요.");question.requestFocusInWindow();return;}
+        SearchIndex.Focus scope=currentScope().target();
+        List<String> notes=isChecked(currentScope())?targets.selection():null;
+        if(notes!=null && notes.isEmpty()){state.setText("검색할 문서를 선택하거나 전체 문서로 전환하세요.");return;}
         var provider=(DocumentAgent.Provider)providers.getSelectedItem();
         String model=modelId;
         try{provider.executable();}catch(java.io.IOException e){
@@ -657,9 +662,6 @@ final class AgentDialog extends JPanel {
         }
         var choice=reasoning;
         question.setText("");
-        SearchIndex.Focus scope=currentScope().target();
-        List<String> notes=isChecked(currentScope())?targets.selection():null;
-        if(notes!=null && notes.isEmpty()){question.setText(text);state.setText("검색할 문서를 선택하거나 전체 문서로 전환하세요.");return;}
         var selection=new TurnScope(scope,notes);
         if(!selection.equals(previousScope))history.clear();
         previousScope=selection;

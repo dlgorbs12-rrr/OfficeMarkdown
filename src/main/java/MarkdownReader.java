@@ -21,7 +21,12 @@ final class MarkdownReader {
 
     static Page firstPage(Path file) throws IOException {
         Page[] first={null};
-        scan(file,page->{first[0]=page;return true;});
+        scan(file,page->{
+            if (first[0]==null) first[0]=page;
+            if (page.section().equals("?? ??")) return false;
+            first[0]=page;
+            return true;
+        });
         return first[0];
     }
 
