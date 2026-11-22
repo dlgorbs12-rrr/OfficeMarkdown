@@ -132,7 +132,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
         };
         // A manual role takes precedence, including an explicit unclassified selection.
         type="(d.role='"+kind.name()+"' OR (d.role='' AND "+type+"))";
-        String sql="SELECT d.md,d.source,d.title,l.section,substr(l.text,1,2000) FROM visible_docs d JOIN lines l ON l.doc=d.id "
+        String sql="SELECT d.md,d.source,d.title,l.section,substr(l.text,1,2000),d.manual_role FROM visible_docs d JOIN lines l ON l.doc=d.id "
                 +"WHERE "+type+" AND l.kind=2 AND l.text NOT LIKE '## %' AND l.text NOT LIKE '%| --- |%' "
                 +(focus==null?"":"AND d.md=? ")+(focus!=null && focus.section()!=null?"AND l.section=? ":"")+"ORDER BY d.id,l.id";
         record Section(String md,String section){}
@@ -143,7 +143,7 @@ record PmReference(Kind kind,List<String> identifiers,List<String> topics) {
                 while(rs.next()){
                     String name=rs.getString(3),section=rs.getString(4),line=rs.getString(5);
                     String body=fold(line),heading=fold(section),file=fold(name);
-                    if(requireTarget && file.contains("설계") && SUPPORTING_MATERIAL.matcher(file.substring(file.indexOf("설계")+2)).find())continue;
+                    if(requireTarget && rs.getString(6)==null && file.contains("설계") && SUPPORTING_MATERIAL.matcher(file.substring(file.indexOf("설계")+2)).find())continue;
                     int fileIds=0,rowIds=0;
                     for(String id:identifiers){
                         if(identifies(id,name,file,idPatterns))fileIds++;

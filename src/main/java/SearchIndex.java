@@ -183,10 +183,11 @@ final class SearchIndex {
             try(var table=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='document_roles'")){
                 hasRoles=table.next();
             }
+            String manualRole=hasRoles?"r.manual":"NULL";
             String role=hasRoles?"coalesce(r.manual,r.inferred,'')":"''";
             String join=hasRoles?" LEFT JOIN document_roles r ON r.md=d.md":"";
             String predicate = visibilityPredicate(hasQueue);
-            sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.*,"+role+" AS role FROM main.docs d"+join + predicate);
+            sql.execute("CREATE TEMP VIEW visible_docs AS SELECT d.*,"+role+" AS role,"+manualRole+" AS manual_role FROM main.docs d"+join + predicate);
             boolean hasPictureText;
             try(var t=sql.executeQuery("SELECT 1 FROM sqlite_master WHERE name='picture_search_ocr'")){
                 hasPictureText=t.next();
