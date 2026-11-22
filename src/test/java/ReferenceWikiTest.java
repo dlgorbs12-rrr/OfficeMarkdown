@@ -65,9 +65,112 @@ class ReferenceWikiTest {
         ReferenceIndex.prepare();
         var image = ReferenceWiki.preview(ReferenceIndex.pages(source).getFirst());
         assertEquals(Color.RED.getRGB(), colorOf(image));
+        // The shadow is dropped on the in-memory copy only; previewing again must leave the source untouched.
         var original = Files.readAllBytes(source);
         ReferenceWiki.preview(ReferenceIndex.pages(source).getFirst());
         assertArrayEquals(original, Files.readAllBytes(source));
+    }
+
+    @Test void dropsShadowsFromStylesAndShapesWithoutAnyFill() {
+        var cases = new java.util.LinkedHashMap<String, java.util.function.Consumer<org.apache.poi.xslf.usermodel.XSLFSlide>>();
+        cases.put("no fill element", slide -> addShadow(spPr(frame(slide))));
+        cases.put("style fillRef 0", slide -> {
+            var frame = frame(slide);
+            addShadow(spPr(frame));
+            style(frame, 0, 0);
+        });
+        cases.put("style effectRef 3", slide -> {
+            var frame = frame(slide);
+            spPr(frame).addNewNoFill();
+            style(frame, 1, 3);
+        });
+        cases.put("inside group", slide -> {
+            var group = slide.createGroup();
+            group.setAnchor(new Rectangle2D.Double(60, 60, 840, 400));
+            group.setInteriorAnchor(new Rectangle2D.Double(60, 60, 840, 400));
+            var frame = group.createAutoShape();
+            frame.setShapeType(ShapeType.RECT);
+            frame.setAnchor(new Rectangle2D.Double(60, 60, 840, 400));
+            frame.setLineColor(Color.GRAY);
+            spPr(frame).addNewNoFill();
+            addShadow(spPr(frame));
+        });
+        cases.forEach((name, frame) -> {
+            assertNotEquals(Color.RED.getRGB(), drawCenter(frame, false), name + " should reproduce the dark shadow");
+            assertEquals(Color.RED.getRGB(), drawCenter(frame, true), name);
+        });
+    }
+
+    @Test void keepsShadowsOfFilledShapes() {
+        try (var show = new XMLSlideShow()) {
+            var frame = frame(show.createSlide());
+            frame.setFillColor(Color.BLUE);
+            addShadow(spPr(frame));
+            ReferenceWiki.dropUnfilledShadows(frame);
+            assertNotNull(frame.getShadow());
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
+    private static int drawCenter(java.util.function.Consumer<org.apache.poi.xslf.usermodel.XSLFSlide> frame, boolean fix) {
+        try (var show = new XMLSlideShow()) {
+            show.setPageSize(new Dimension(960, 540));
+            var slide = show.createSlide();
+            var content = slide.createAutoShape();
+            content.setShapeType(ShapeType.RECT);
+            content.setAnchor(new Rectangle2D.Double(80, 80, 800, 360));
+            content.setFillColor(Color.RED);
+            frame.accept(slide);
+            if (fix) slide.getShapes().forEach(ReferenceWiki::dropUnfilledShadows);
+            var image = new BufferedImage(960, 540, BufferedImage.TYPE_INT_RGB);
+            var graphics = image.createGraphics();
+            graphics.setColor(Color.WHITE);
+            graphics.fillRect(0, 0, 960, 540);
+            slide.draw(graphics);
+            graphics.dispose();
+            return image.getRGB(480, 270);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
+    private static org.apache.poi.xslf.usermodel.XSLFAutoShape frame(org.apache.poi.xslf.usermodel.XSLFSlide slide) {
+        var frame = slide.createAutoShape();
+        frame.setShapeType(ShapeType.RECT);
+        frame.setAnchor(new Rectangle2D.Double(60, 60, 840, 400));
+        frame.setLineColor(Color.GRAY);
+        var properties = spPr(frame);
+        if (properties.isSetNoFill()) properties.unsetNoFill();
+        return frame;
+    }
+
+    private static org.openxmlformats.schemas.drawingml.x2006.main.CTShapeProperties spPr(org.apache.poi.xslf.usermodel.XSLFShape shape) {
+        return ((org.openxmlformats.schemas.presentationml.x2006.main.CTShape) shape.getXmlObject()).getSpPr();
+    }
+
+    private static void addShadow(org.openxmlformats.schemas.drawingml.x2006.main.CTShapeProperties properties) {
+        var list = properties.isSetEffectLst() ? properties.getEffectLst() : properties.addNewEffectLst();
+        var shadow = list.addNewOuterShdw();
+        shadow.setBlurRad(38100);
+        shadow.setDist(12700);
+        shadow.setDir(5400000);
+        var color = shadow.addNewPrstClr();
+        color.setVal(org.openxmlformats.schemas.drawingml.x2006.main.STPresetColorVal.BLACK);
+        color.addNewAlpha().setVal(20000);
+    }
+
+    private static void style(org.apache.poi.xslf.usermodel.XSLFAutoShape frame, int fill, int effect) {
+        var shape = (org.openxmlformats.schemas.presentationml.x2006.main.CTShape) frame.getXmlObject();
+        var style = shape.isSetStyle() ? shape.getStyle() : shape.addNewStyle();
+        var accent = org.openxmlformats.schemas.drawingml.x2006.main.STSchemeColorVal.ACCENT_1;
+        style.addNewLnRef().setIdx(1);
+        style.getLnRef().addNewSchemeClr().setVal(accent);
+        style.addNewFillRef().setIdx(fill);
+        style.getFillRef().addNewSchemeClr().setVal(accent);
+        style.addNewEffectRef().setIdx(effect);
+        style.getEffectRef().addNewSchemeClr().setVal(accent);
+        style.addNewFontRef().setIdx(org.openxmlformats.schemas.drawingml.x2006.main.STFontCollectionIndex.MINOR);
     }
 
     @Test void rendersAndDescribesTheConvertedSlideOrder() throws Exception {

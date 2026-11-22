@@ -223,14 +223,20 @@ final class ReferenceWiki {
 
     // POI paints the outer shadow of an unfilled shape as a filled silhouette, which covers the content
     // inside frames and panels. PowerPoint only shadows the outline, so drop it on the in-memory copy.
+    // The shadow may come from the shape's own effect list or from its style's effectRef, and the shape
+    // counts as unfilled whether it says noFill or simply has no fill at all.
     static void dropUnfilledShadows(XSLFShape shape){
         if(shape instanceof XSLFGroupShape group){
             group.getShapes().forEach(ReferenceWiki::dropUnfilledShadows);
-        }else if(shape.getXmlObject() instanceof org.openxmlformats.schemas.presentationml.x2006.main.CTShape sp){
+        }else if(shape instanceof XSLFAutoShape auto && auto.getShadow()!=null
+                && auto.getFillStyle().getPaint()==null
+                && auto.getXmlObject() instanceof org.openxmlformats.schemas.presentationml.x2006.main.CTShape sp){
             var properties=sp.getSpPr();
-            if(properties!=null && properties.isSetNoFill() && properties.isSetEffectLst()
-                    && properties.getEffectLst().isSetOuterShdw())
-                properties.getEffectLst().unsetOuterShdw();
+            if(properties.isSetEffectLst()){
+                if(properties.getEffectLst().isSetOuterShdw()) properties.getEffectLst().unsetOuterShdw();
+            }else{
+                properties.addNewEffectLst(); // an empty list overrides the style's effectRef
+            }
         }
     }
 
