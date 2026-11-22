@@ -329,7 +329,7 @@ public final class OfficeMarkdown {
         localSearch.add(searchBox, BorderLayout.NORTH);
         localSearch.add(contents);
         var referenceArea = LibraryStyle.panel(new BorderLayout(0,4),0);
-        String slideHelp = "검색 결과의 PowerPoint 파일에서 검색어에 맞는 슬라이드를 최대 3장 골라 미리 보여줍니다.";
+        String slideHelp = "검색된 PPT에서 검색어에 맞는 슬라이드를 최대 3장 미리 보여줍니다.";
         var slideHint = LibraryStyle.label(slideHelp, 13, false, LibraryStyle.MUTED);
         slideHint.setLabelFor(recommendSlides);
         recommendSlides.getAccessibleContext().setAccessibleDescription(slideHelp);

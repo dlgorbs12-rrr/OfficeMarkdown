@@ -164,12 +164,12 @@ final class ReferencePanel extends JPanel {
                     var result = get();
                     var items = result.items();
                     if (items.isEmpty()) {
-                        setStatus(result.hasStalePages() ? "추천 원본이 변경되었습니다. 최신 장표를 보려면 다시 검색하세요."
+                        setStatus(result.hasStalePages() ? "추천 원본이 변경되었습니다. 최신 슬라이드를 보려면 다시 검색하세요."
                                 : "현재 검색 범위에서 근거를 확인한 추천 슬라이드가 없습니다.");
                         return;
                     }
                     recommendations.addAll(items);
-                    setStatus(items.size() + (result.hasStalePages() ? "장 · 원본이 변경된 장표를 제외했습니다." : "장"));
+                    setStatus(items.size() + (result.hasStalePages() ? "장 · 원본이 변경된 슬라이드를 제외했습니다." : "장"));
                     detail.setVisible(true);
                     list.setSelectedIndex(0);
                 } catch (InterruptedException ex) {
@@ -319,7 +319,7 @@ final class ReferencePanel extends JPanel {
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
                 } catch (ExecutionException ex) {
-                    setStatus("원본 장표를 확인할 수 없습니다. 다시 검색하세요.");
+                    setStatus("원본 슬라이드를 확인할 수 없습니다. 다시 검색하세요.");
                 }
             }
         };
@@ -330,7 +330,7 @@ final class ReferencePanel extends JPanel {
         recommendations.removeElement(item);
         detail.setVisible(!recommendations.isEmpty());
         if (!recommendations.isEmpty() && list.isSelectionEmpty()) list.setSelectedIndex(0);
-        setStatus("원본 또는 색인이 변경된 추천을 제외했습니다. 최신 장표를 보려면 다시 검색하세요.");
+        setStatus("원본 또는 색인이 변경된 추천을 제외했습니다. 최신 슬라이드를 보려면 다시 검색하세요.");
     }
 
     private static String pageLabel(ReferenceIndex.Page page) {
