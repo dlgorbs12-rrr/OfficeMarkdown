@@ -7,13 +7,13 @@ class MarkdownReaderTest {
     @TempDir Path root;
     @Test void combinedRankedExcerptLeadsToTheMatchingChunk() throws Exception {
         var file=root.resolve("nearby.md");
-        Files.writeString(file,"# Nearby\n\n[원본 파일 열기](<"+root.resolve("nearby.docx").toUri()+">)\n\n## Topic\nbravo\n"+"filler\n".repeat(110)+"\nalpha\nbravo\n");
+        Files.writeString(file,"# Nearby\n\n[원본 파일 열기](<"+root.resolve("nearby.docx").toUri()+">)\n\n## Topic\nbravo\n"+"earlier\n".repeat(10)+"prefixalpha … detail\nprefixbravo\n"+"filler\n".repeat(110)+"\nalpha … detail\nbravo\n");
         SearchIndex.synchronize(root,ignored->{});
         var hit=SearchIndex.searchCached(root,"alpha bravo",SearchIndex.Scope.CONTENT,SearchIndex.Mode.RELEVANCE,8).getFirst();
         assertTrue(hit.excerpt().contains(" … "));
         var pages=MarkdownReader.read(file);
         var page=pages.get(MarkdownReader.locate(pages,hit));
-        assertTrue(page.part()>1);
+        assertTrue(page.part()>1,hit.excerpt()+" "+hit.sourceLines());
         assertEquals(page,MarkdownReader.previewPage(file,hit));
     }
 

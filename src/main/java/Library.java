@@ -217,9 +217,9 @@ final class Library {
         }
     }
 
-    record Hit(Path md, Path source, String title, String section, String excerpt, PictureAssets.Reference picture, String imageDescription,String additionalOcr,List<Path> otherSources,String sourceExcerpt) {
+    record Hit(Path md, Path source, String title, String section, String excerpt, PictureAssets.Reference picture, String imageDescription,String additionalOcr,List<Path> otherSources,List<String> sourceLines) {
         Hit(Path md,Path source,String title,String section,String excerpt,PictureAssets.Reference picture,String imageDescription,String additionalOcr,List<Path> otherSources){
-            this(md,source,title,section,excerpt,picture,imageDescription,additionalOcr,otherSources,excerpt);
+            this(md,source,title,section,excerpt,picture,imageDescription,additionalOcr,otherSources,List.of());
         }
         Hit(Path md,Path source,String title,String section,String excerpt,PictureAssets.Reference picture,String imageDescription,String additionalOcr){
             this(md,source,title,section,excerpt,picture,imageDescription,additionalOcr,List.of());

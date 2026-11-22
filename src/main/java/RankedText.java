@@ -78,7 +78,7 @@ final class RankedText {
                     String text=r.getString(5);
                     double score=scoring.score(title,heading,text,r.getString(10),kind,r.getLong(7),recent);
                     if(!Double.isFinite(score) || best!=null && score<=best.score)continue;
-                    var hit=new Library.Hit(Path.of(r.getString(1)),Path.of(source),r.getString(3),section,scoring.excerpt,null,"","",List.of(),text);
+                    var hit=new Library.Hit(Path.of(r.getString(1)),Path.of(source),r.getString(3),section,scoring.excerpt,null,"","",List.of(),scoring.context);
                     String digest=kind==2?r.getString(9):null;
                     Group key=byDocument?new Group(hit.md().toString(),"",null):new Group(digest==null?source:LatestVersionSelection.searchFamily(hit.source()),section,digest);
                     best=new Result(hit,score,key);
@@ -141,7 +141,7 @@ final class RankedText {
                                 if(!path.equals(h.source()) && LatestVersionSelection.searchFamily(path).equals(r.group.family))others.add(path);
                             }
                         }
-                        if(!others.isEmpty())h=new Library.Hit(h.md(),h.source(),h.title(),h.section(),h.excerpt(),null,"","",List.copyOf(others),h.sourceExcerpt());
+                        if(!others.isEmpty())h=new Library.Hit(h.md(),h.source(),h.title(),h.section(),h.excerpt(),null,"","",List.copyOf(others),h.sourceLines());
                     }
                     result.add(h);
                 }
@@ -156,6 +156,7 @@ final class RankedText {
         final double[] weights;
         final List<Pattern> exact;
         String excerpt;
+        List<String> context;
         Scoring(String query,List<String> words,double[] weights){
             this.words=words;this.weights=weights;phrase=RelevanceSearch.compact(query);
             exact=CODE.matcher(query).results().filter(m->(m.start()==0 || !ascii(query.charAt(m.start()-1)))
@@ -165,6 +166,7 @@ final class RankedText {
         private static boolean ascii(char c){return c<128 && Character.isLetterOrDigit(c);}
         double score(String rawTitle,String rawSection,String raw,String header,int kind,long id,Deque<Line> recent){
             excerpt=raw;
+            context=List.of(raw);
             String title=RelevanceSearch.compact(rawTitle),section=RelevanceSearch.compact(rawSection),body=RelevanceSearch.compact(raw);
             int covered=0,bodyMask=0,titleCount=0;
             double score=0;
@@ -183,9 +185,11 @@ final class RankedText {
                 for(var line:recent)nearby|=line.mask;
                 int missing=nearby & ~covered;
                 if(missing!=0){
-                    var lines=new StringJoiner(" … ");
+                    var lines=new ArrayList<String>();
                     for(var line:recent)if((line.mask & missing)!=0)lines.add(line.text);
-                    excerpt=lines.add(raw).toString();
+                    lines.add(raw);
+                    context=List.copyOf(lines);
+                    excerpt=String.join(" … ",context);
                 }
                 recent.addLast(new Line(id,bodyMask,raw));
             }else recent.clear();

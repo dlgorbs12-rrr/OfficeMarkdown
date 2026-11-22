@@ -32,24 +32,25 @@ final class MarkdownReader {
 
     private static final class ExcerptLocator {
         final String anchor;
-        final String[] context;
+        final List<String> lines;
         final ArrayDeque<String> recent=new ArrayDeque<>();
         ExcerptLocator(Library.Hit hit,String sample){
             anchor=sample;
-            String suffix=" … "+sample;
-            context=!hit.excerpt().equals(sample) && hit.excerpt().endsWith(suffix)
-                    ? hit.excerpt().substring(0,hit.excerpt().length()-suffix.length()).split(" … ") : new String[0];
+            lines=hit.sourceLines();
         }
         boolean matches(Page page){
-            String readable=page.source().replace("<br>"," ").replace("&lt;","<").replace("&gt;",">")
-                    .replace("&amp;","&").replace("\\|","|").replace("\\\\","\\");
-            if(context.length==0)return readable.contains(anchor);
-            for(String line:readable.split("\\R")){
-                if(line.isBlank())continue;
-                if(line.contains(anchor)){
+            if(lines.isEmpty()){
+                return decoded(page.source()).contains(anchor);
+            }
+            for(String raw:page.source().split("\\R")){
+                if(raw.isBlank())continue;
+                String line=raw.startsWith("| ")?decoded(raw):raw;
+                int last=lines.size()-1;
+                if(line.equals(lines.get(last))){
+                    if(last==0)return true;
                     int matched=0;
                     for(String prior:recent){
-                        if(prior.contains(context[matched]) && ++matched==context.length)return true;
+                        if(prior.equals(lines.get(matched)) && ++matched==last)return true;
                     }
                 }
                 recent.addLast(line);
@@ -57,10 +58,14 @@ final class MarkdownReader {
             }
             return false;
         }
+        private static String decoded(String text){
+            return text.replace("<br>"," ").replace("&lt;","<").replace("&gt;",">")
+                    .replace("&amp;","&").replace("\\|","|").replace("\\\\","\\");
+        }
     }
 
     static Page previewPage(Path file, Library.Hit hit) throws IOException {
-        var locator=new ExcerptLocator(hit,hit.sourceExcerpt());
+        var locator=new ExcerptLocator(hit,hit.excerpt());
         class Selection {
             Page first, match;
             boolean accept(Page page) {
@@ -112,7 +117,7 @@ final class MarkdownReader {
                 if (containsPicture(pages.get(i), hit.picture())) return i;
             }
         }
-        String section=hit.section(), sample=hit.sourceExcerpt();
+        String section=hit.section(), sample=hit.excerpt();
         if (section.equals("모두 포함")) {
             String[] evidence=sample.split("\\R",3);
             if (evidence.length>=2 && evidence[0].contains("  ·  ")) {
