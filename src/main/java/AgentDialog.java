@@ -9,7 +9,7 @@ import org.jsoup.nodes.Entities;
 final class AgentDialog extends JPanel {
     private static final Color PAPER=new Color(0xFBF8F3), SAND=new Color(0xF2E6D2);
     private final JComboBox<DocumentAgent.Provider> providers=new JComboBox<>(DocumentAgent.Provider.values());
-    private final JTextArea question=new JTextArea(2,30){
+    private final JTextArea question=new JTextArea(1,22){
         protected void paintComponent(Graphics g){
             super.paintComponent(g);
             if(getDocument().getLength()==0){
@@ -38,12 +38,15 @@ final class AgentDialog extends JPanel {
     private final CardLayout sideLayout=new CardLayout();
     private final JPanel sidebar=new SearchStudio.Round(sideLayout,20,Color.WHITE,LibraryStyle.LINE,1);
     private final ChatDocuments documents=new ChatDocuments(this::showSelected);
-    private final JButton scopeChip=new JButton("전체 문서");
+    private record ScopeChoice(String label, SearchIndex.Focus target) {
+        @Override public String toString() { return label; }
+    }
+    private static final ScopeChoice ALL=new ScopeChoice("전체 문서",null);
+    private final JComboBox<ScopeChoice> scopes=new JComboBox<>(new ScopeChoice[]{ALL});
 
-    private SearchIndex.Focus focus;
     private final JLabel image = new JLabel("", SwingConstants.CENTER);
     private final JButton original = new JButton("원본 파일 열기");
-    private final JButton position = new JButton("문서에서 위치 보기");
+    private final JButton position = new JButton("인용 위치 보기");
     private SwingWorker<?,?> previewTask;
     private SwingWorker<McpSearch.Reply,String> task;
 
@@ -67,7 +70,8 @@ final class AgentDialog extends JPanel {
             history.clear();
             documents.clear();
             hidePreview();
-            setFocus(null,false);
+            scopes.setSelectedItem(ALL);
+            updateScopes(null);
             question.setText("");
             state.setText("Office MCP · 메시지를 보내면 연결");
             showWelcome();
@@ -89,7 +93,7 @@ final class AgentDialog extends JPanel {
         JPanel result=LibraryStyle.panel(new BorderLayout(),0);
         results.setBorder(null);results.setBackground(PAPER);
 
-        answer.setEditable(false);answer.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES,true);
+        answer.setBackground(Color.WHITE);answer.setEditable(false);answer.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES,true);
         answer.setFont(LibraryStyle.TYPE);
         answer.setText("<html><body style='color:#645f73'><p>질문을 입력하면 관련 문서를 찾아 답변과 인용문을 함께 보여줍니다.</p></body></html>");
         conversation.setLayout(new BoxLayout(conversation,BoxLayout.Y_AXIS));
@@ -109,9 +113,24 @@ final class AgentDialog extends JPanel {
         var closePreview=new JButton("‹  문서 목록");
         LibraryStyle.button(closePreview,false);
         closePreview.addActionListener(e->hidePreview());
-        var detailHeader=LibraryStyle.panel(new BorderLayout(8,0),0);
-        detailHeader.add(closePreview,BorderLayout.WEST);
-        detailHeader.add(LibraryStyle.label("미리보기",16,true,LibraryStyle.INK),BorderLayout.EAST);
+        var detailHeader=LibraryStyle.panel(new BorderLayout(0,4),0);
+        var navigation=LibraryStyle.panel(new BorderLayout(),0);
+        navigation.add(closePreview,BorderLayout.WEST);
+        detailHeader.add(navigation,BorderLayout.NORTH);
+        var toolbar=LibraryStyle.panel(new BorderLayout(3,0),0);
+        toolbar.add(LibraryStyle.label("미리보기",13,true,LibraryStyle.INK),BorderLayout.WEST);
+        var documentActions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,3,0),0);
+        for (var button:List.of(closePreview,position,original)) {
+            LibraryStyle.button(button,false);
+            button.setFont(LibraryStyle.TYPE.deriveFont(12f));
+            button.putClientProperty("JButton.buttonType",null);
+            button.putClientProperty("FlatLaf.style","arc: 8; minimumWidth: 0");
+            button.setMargin(new Insets(2,5,2,5));
+        }
+        documentActions.add(position);
+        documentActions.add(original);
+        toolbar.add(documentActions,BorderLayout.EAST);
+        detailHeader.add(toolbar,BorderLayout.CENTER);
         detail.setOpaque(false);
         detail.add(detailHeader,BorderLayout.NORTH);
         var readerScroll=new JScrollPane(answer);
@@ -121,13 +140,6 @@ final class AgentDialog extends JPanel {
         readerScroll.getViewport().setBackground(Color.WHITE);
         readerScroll.getVerticalScrollBar().setUnitIncrement(18);
         detail.add(readerScroll,BorderLayout.CENTER);
-        var buttons=LibraryStyle.panel(new GridLayout(0,2,4,4),0);
-        var scopeDoc=new JButton("이 문서에서 대화");
-        scopeDoc.addActionListener(e->{if(selected!=null)setFocus(selected.proof(),false);hidePreview();focusQuestion();});
-        var scopeSection=new JButton("이 구역에서 대화");
-        scopeSection.addActionListener(e->{if(selected!=null)setFocus(selected.proof(),true);hidePreview();focusQuestion();});
-        for (var button:List.of(scopeDoc,scopeSection,position,original)) LibraryStyle.button(button,false);
-        buttons.add(scopeDoc);buttons.add(scopeSection);buttons.add(position);buttons.add(original);detail.add(buttons,BorderLayout.SOUTH);
         original.setEnabled(false);position.setEnabled(false);
 
         original.addActionListener(e->{var c=selected;if(c!=null)actOnCurrent(c,openOriginal);});
@@ -140,15 +152,28 @@ final class AgentDialog extends JPanel {
         sidebar.setMinimumSize(new Dimension(245,120));
         sidebar.add(documents,"list");
         sidebar.add(detail,"preview");
-        results.setLeftComponent(threadScroll);
+        var chatColumn=LibraryStyle.panel(new BorderLayout(0,8),0);
+        chatColumn.add(threadScroll);
+        results.setLeftComponent(chatColumn);
         results.setRightComponent(sidebar);
         results.setDividerSize(8);
         results.setResizeWeight(0.65);
         result.add(results);body.add(result);
-        var composer=new SearchStudio.Round(new BorderLayout(0,8),22,Color.WHITE,LibraryStyle.LINE,2);
-        composer.setBorder(BorderFactory.createEmptyBorder(10,14,12,14));
-        scopeChip.setEnabled(false);
-        scopeChip.addActionListener(e->setFocus(null,false));
+        var composer=new SearchStudio.Round(new BorderLayout(0,3),14,Color.WHITE,LibraryStyle.LINE,1);
+        composer.setBorder(BorderFactory.createEmptyBorder(6,9,6,9));
+        var scopeRow=LibraryStyle.panel(new BorderLayout(6,0),0);
+        var scopeLabel=LibraryStyle.label("검색 범위",12,true,LibraryStyle.MUTED);
+        scopeLabel.setLabelFor(scopes);
+        scopes.setFont(LibraryStyle.TYPE.deriveFont(12f));
+        scopes.setBackground(new Color(0xEEF2E7));
+        scopes.setPrototypeDisplayValue(new ScopeChoice("이 구역만 · 운영 가이드.xlsx › 검토 절차",null));
+        scopes.getAccessibleContext().setAccessibleName("검색 범위");
+        scopes.addActionListener(e->scopes.setToolTipText(currentScope().label()));
+        scopeRow.add(scopeLabel,BorderLayout.WEST);
+        scopeRow.add(scopes,BorderLayout.CENTER);
+        var scopeLine=LibraryStyle.panel(new BorderLayout(),0);
+        scopeLine.add(scopeRow,BorderLayout.WEST);
+        composer.add(scopeLine,BorderLayout.NORTH);
         var inputScroll=new JScrollPane(question);
         inputScroll.setBorder(BorderFactory.createEmptyBorder());
         composer.add(inputScroll,BorderLayout.CENTER);
@@ -158,12 +183,12 @@ final class AgentDialog extends JPanel {
         question.setToolTipText("Enter 전송 · Shift+Enter 줄바꿈");
         JPanel footer=LibraryStyle.panel(new BorderLayout(6,0),0);
         state.setFont(LibraryStyle.TYPE.deriveFont(12f));state.setForeground(LibraryStyle.MUTED);
-        footer.add(scopeChip,BorderLayout.WEST);
+
 
         JPanel actions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
         actions.add(modelButton);actions.add(stop);actions.add(ask);
         footer.add(actions,BorderLayout.EAST);composer.add(footer,BorderLayout.SOUTH);
-        body.add(composer,BorderLayout.SOUTH);
+        chatColumn.add(composer,BorderLayout.SOUTH);
         var canvas=new JPanel(new BorderLayout()){
             public void doLayout(){
                 super.doLayout();
@@ -181,13 +206,17 @@ final class AgentDialog extends JPanel {
             public void actionPerformed(java.awt.event.ActionEvent e){if(ask.isEnabled())runQuestion();}
         });
         LibraryStyle.button(ask,true);
-        ask.setText("↑");ask.setToolTipText("보내기 · Enter");
+        ask.putClientProperty("JButton.buttonType",null);
+        ask.putClientProperty("FlatLaf.style","arc: 8");
+        ask.setText("보내기 ↑");ask.setToolTipText("보내기 · Enter");
         ask.getAccessibleContext().setAccessibleName("보내기");
-        ask.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD,20f));
-        ask.setMargin(new Insets(0,0,0,0));ask.setPreferredSize(new Dimension(38,38));
-        ask.setBackground(new Color(0xBF5A10));
+        ask.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD,13f));
+        ask.setMargin(new Insets(3,9,3,9));
+        ask.setBackground(SearchStudio.HOT);
         LibraryStyle.button(newChat,false);
         LibraryStyle.button(modelButton,false);
+        modelButton.setContentAreaFilled(false);
+        modelButton.setMargin(new Insets(3,5,3,5));
     }
 
     private static Icon chevron(boolean up){
@@ -241,7 +270,7 @@ final class AgentDialog extends JPanel {
         var questionRow=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,0,0),0);
         questionRow.add(balloon);turn.add(questionRow,BorderLayout.NORTH);
         turn.setAlignmentX(Component.LEFT_ALIGNMENT);
-        if(focus!=null) bubble.setToolTipText(scopeChip.getText());
+        if(currentScope().target()!=null) bubble.setToolTipText(currentScope().label());
         conversation.add(turn);
         turnStatus(turn,"에이전트 시작 중…");
         SwingUtilities.invokeLater(()->threadScroll.getVerticalScrollBar().setValue(threadScroll.getVerticalScrollBar().getMaximum()));
@@ -317,18 +346,31 @@ final class AgentDialog extends JPanel {
         return html.toString();
     }
 
-    private void setFocus(Library.Hit hit,boolean page){
-        if (hit!=null && hit.section().equals("제목") && hit.picture()==null) page=false;
-        focus=hit==null?null:new SearchIndex.Focus(hit.md(),page?hit.section():null);
-        String label=hit==null?"전체 문서":hit.title()+(page?" › "+hit.section():"");
-        String shortName=hit!=null && hit.title().length()>30 ? hit.title().substring(0,29)+"…" : hit==null?label:hit.title();
-        scopeChip.setText(shortName+(hit!=null && page?" › "+hit.section():"")+(hit==null?"":"  ×"));
-        scopeChip.setEnabled(hit!=null);scopeChip.setToolTipText(hit==null?label:"색인된 전체 문서으로 전환 · "+label);
+    private ScopeChoice currentScope() {
+        return (ScopeChoice)scopes.getSelectedItem();
+    }
+
+    private void updateScopes(Library.Hit hit) {
+        var active=currentScope();
+        var options=new java.util.LinkedHashSet<ScopeChoice>();
+        options.add(ALL);
+        options.add(active);
+        if(hit!=null) {
+            String file=hit.source().getFileName().toString();
+            options.add(new ScopeChoice("문서 전체 · "+file,new SearchIndex.Focus(hit.md(),null)));
+            if(!hit.section().isBlank() && !(hit.section().equals("제목") && hit.picture()==null))
+                options.add(new ScopeChoice("이 구역만 · "+file+" › "+hit.section(),new SearchIndex.Focus(hit.md(),hit.section())));
+        }
+        var model=new DefaultComboBoxModel<>(options.toArray(ScopeChoice[]::new));
+        model.setSelectedItem(active);
+        scopes.setModel(model);
+        scopes.setToolTipText(active.label());
     }
 
     private void hidePreview(){
         if(previewTask!=null)previewTask.cancel(true);
         selected=null;
+        updateScopes(null);
         sideLayout.show(sidebar,"list");
         documents.focusList();
     }
@@ -349,6 +391,7 @@ final class AgentDialog extends JPanel {
 
     private void showSelected(DocumentAgent.Claim claim) {
         selected=claim;
+        updateScopes(claim==null?null:claim.proof());
         if(previewTask!=null) previewTask.cancel(true);
         image.setIcon(null);
         original.setEnabled(claim!=null);position.setEnabled(claim!=null);
@@ -542,7 +585,7 @@ final class AgentDialog extends JPanel {
         var choice=reasoning;
         question.setText("");
         String context=String.join("\n",history);
-        SearchIndex.Focus scope=focus;
+        SearchIndex.Focus scope=currentScope().target();
         JPanel turn=beginTurn(text);
         var transcript=LibraryStyle.panel(null,4);
         transcript.setLayout(new BoxLayout(transcript,BoxLayout.Y_AXIS));
