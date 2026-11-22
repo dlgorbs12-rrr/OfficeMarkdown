@@ -14,6 +14,10 @@ final class RankedText {
             .thenComparing(r->r.hit.title()).thenComparing(r->r.hit.md()).thenComparing(r->r.hit.section());
 
     static List<Library.Hit> search(Connection db,String query,SearchIndex.Scope scope,int limit)throws SQLException{
+        return search(db,query,scope,limit,"");
+    }
+
+    static List<Library.Hit> search(Connection db,String query,SearchIndex.Scope scope,int limit,String sectionFilter)throws SQLException{
         var words=RelevanceSearch.words(query);
         if(words.isEmpty())return List.of();
         boolean fields=RankedFields.installed(db);
@@ -44,13 +48,15 @@ final class RankedText {
                 +(fields?"s.digest,h.header":"NULL,NULL")+" FROM candidates c CROSS JOIN lines l ON l.id=c.id "
                 +"JOIN visible_docs d ON d.id=l.doc "+aux
                 +switch(scope){case TITLE->" WHERE l.kind=0";case CONTENT->" WHERE l.kind=2";default->"";};
+        if(!sectionFilter.isEmpty())sql+=(scope==SearchIndex.Scope.ALL?" WHERE ":" AND ")+"l.section=? AND l.kind=2";
         // Keep converted copies adjacent so the limit applies after choosing the best excerpt.
         var top=new Top(limit);
         try(var q=db.prepareStatement(sql+" ORDER BY d.source,l.section,l.doc,l.id")){
             int bind=1;
             for(String word:shortWords)q.setString(bind++,word);
             if(longWords.length()>0)q.setString(bind++,longWords.toString());
-            if(joinedWords.length()>0)q.setString(bind,joinedWords.toString());
+            if(joinedWords.length()>0)q.setString(bind++,joinedWords.toString());
+            if(!sectionFilter.isEmpty())q.setString(bind,sectionFilter);
             try(var r=q.executeQuery()){
                 String source=null,section=null;
                 long doc=-1;
@@ -68,7 +74,7 @@ final class RankedText {
                     String text=r.getString(5);
                     double score=scoring.score(title,heading,text,r.getString(10),kind,r.getLong(7),recent);
                     if(!Double.isFinite(score) || best!=null && score<=best.score)continue;
-                    var hit=new Library.Hit(Path.of(r.getString(1)),Path.of(source),r.getString(3),section,scoring.excerpt);
+                    var hit=new Library.Hit(Path.of(r.getString(1)),Path.of(source),r.getString(3),section,scoring.excerpt,null,"","",List.of(),text);
                     String digest=kind==2?r.getString(9):null;
                     Group key=new Group(digest==null?source:LatestVersionSelection.searchFamily(hit.source()),section,digest);
                     best=new Result(hit,score,key);
@@ -131,7 +137,7 @@ final class RankedText {
                                 if(!path.equals(h.source()) && LatestVersionSelection.searchFamily(path).equals(r.group.family))others.add(path);
                             }
                         }
-                        if(!others.isEmpty())h=new Library.Hit(h.md(),h.source(),h.title(),h.section(),h.excerpt(),null,"","",List.copyOf(others));
+                        if(!others.isEmpty())h=new Library.Hit(h.md(),h.source(),h.title(),h.section(),h.excerpt(),null,"","",List.copyOf(others),h.sourceExcerpt());
                     }
                     result.add(h);
                 }

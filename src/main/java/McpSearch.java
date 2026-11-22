@@ -27,7 +27,7 @@ final class McpSearch {
         }
         args.add(session.toString());
         var options=new ArrayList<String>();
-        var names=new ArrayList<>(List.of("search","list_sections","read_evidence"));
+        var names=new ArrayList<>(List.of("search","search_documents","list_sections","read_evidence"));
         names.addAll(OfficeIndexMcp.SLIDE_TOOLS);
         if(provider==DocumentAgent.Provider.CODEX){
             options.addAll(List.of("-c","mcp_servers.office.command="+cliString(launcher.toString()),
@@ -106,6 +106,7 @@ final class McpSearch {
             String prompt="""
                     사용자의 AI 대화 파트너로서 현재 요청에 직접 답하세요. 보관함 자료가 필요하면 office MCP로 직접 검색하고 내용을 읽으세요.
                     설계 초안 참고 자료를 찾는 요청은 대상 시스템과 산출물 유형을 분리해 제목부터 검색하세요.
+                    자연어 문서 요청에는 search_documents로 관련성순 후보를 먼저 찾고, 정확한 용어나 제목 필터에는 search를 쓰세요.
                     어댑터는 Adapter·Adaptor 표기도 확인하고, 약어 AD가 Adaptor의 일부로만 일치하는 자료는 제외하세요.
                     제목이나 해당 절에서 요청한 대상과 문서 유형을 확인한 자료만 직접 참고본으로 인용하세요.
                     슬라이드 참고 요청은 대화의 조건을 유지하고 search_reference_slides와 read_reference_slide로 장표를 확인하세요.
@@ -155,7 +156,7 @@ final class McpSearch {
                     질문
                     """+question,options);
             var calls=session.resolve("calls");
-            if(!Files.exists(calls) || !Files.readAllLines(calls).contains("search"))throw new IOException("에이전트의 색인 검색 호출을 확인하지 못했습니다.");
+            if(!Files.exists(calls) || Collections.disjoint(Files.readAllLines(calls),List.of("search","search_documents")))throw new IOException("에이전트의 색인 검색 호출을 확인하지 못했습니다.");
             status.accept("MCP 조회 "+Files.readAllLines(calls).size()+"회");
             var answer=new ArrayList<DocumentAgent.Claim>();
             var seen=new HashSet<String>();

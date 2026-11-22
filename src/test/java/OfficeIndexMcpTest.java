@@ -19,6 +19,8 @@ class OfficeIndexMcpTest {
             var server=new OfficeIndexMcp(root);
             var hits=server.call("search",json("{'query':'설계서','field':'title'}"));
             assertEquals(allowed.size(),hits.size());
+            assertEquals(allowed.size(),server.call("search_documents",json("{'query':'AD 어댑터 설계 초본을 만들기 위한 자료 탐색'}")).size());
+            assertTrue(server.call("search_documents",json("{'query':'unselected'}")).isEmpty());
             assertTrue(server.call("search",json("{'query':'unselected','field':'body'}")).isEmpty());
             if(!allowed.isEmpty()){
                 var reply=McpSearch.chat(null,root,"AD 어댑터 설계서 찾아줘","","",null,null,allowed,p->{});
@@ -37,6 +39,9 @@ class OfficeIndexMcpTest {
         Files.writeString(root.resolve("config"),OfficeIndexMcp.JSON.toJson(Map.of("root",root.toString(),"focus",doc.toString(),"section","조사")));
         var server=new OfficeIndexMcp(root);
         assertThrows(IllegalArgumentException.class,()->server.call("read_evidence",json("{'document':'1'}")));
+        var ranked=server.call("search_documents",json("{'query':'연동항목'}"));
+        assertFalse(ranked.isEmpty());
+        for(var hit:ranked)assertEquals("조사",((Map<?,?>)hit).get("section"));
         assertEquals(1,((List<?>)server.call("search",json("{'query':'사전조사','field':'title','required':['IAM'],'optional':['SSO']}"))).size());
         assertEquals(0,((List<?>)server.call("search",json("{'query':'사전조사','field':'title','required':['SSO']}"))).size());
         assertEquals(1,((List<?>)server.call("list_sections",json("{'document':'1'}"))).size());

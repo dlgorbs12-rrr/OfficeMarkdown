@@ -5,6 +5,18 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class MarkdownReaderTest {
     @TempDir Path root;
+    @Test void combinedRankedExcerptLeadsToTheMatchingChunk() throws Exception {
+        var file=root.resolve("nearby.md");
+        Files.writeString(file,"# Nearby\n\n[원본 파일 열기](<"+root.resolve("nearby.docx").toUri()+">)\n\n## Topic\n"+"filler\n".repeat(110)+"\nalpha\nbravo\n");
+        SearchIndex.synchronize(root,ignored->{});
+        var hit=SearchIndex.searchCached(root,"alpha bravo",SearchIndex.Scope.CONTENT,SearchIndex.Mode.RELEVANCE,8).getFirst();
+        assertTrue(hit.excerpt().contains(" … "));
+        var pages=MarkdownReader.read(file);
+        var page=pages.get(MarkdownReader.locate(pages,hit));
+        assertTrue(page.part()>1);
+        assertEquals(page,MarkdownReader.previewPage(file,hit));
+    }
+
     @Test void findAndRenderLateTableRow() throws Exception {
         Path file=root.resolve("자료.md");
         StringBuilder source=new StringBuilder("# 자료\n\n## 시트 · 일정\n\n| 번호 | 확인 |\n| --- | --- |\n");

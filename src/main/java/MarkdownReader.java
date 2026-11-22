@@ -38,7 +38,7 @@ final class MarkdownReader {
                 if (first==null) first=page;
                 String readable=page.source().replace("<br>"," ").replace("&lt;","<").replace("&gt;",">")
                         .replace("&amp;","&").replace("\\|","|").replace("\\\\","\\");
-                if (!readable.contains(hit.excerpt())) return false;
+                if (!readable.contains(hit.sourceExcerpt())) return false;
                 match=page;
                 return true;
             }
@@ -84,7 +84,7 @@ final class MarkdownReader {
                 if (containsPicture(pages.get(i), hit.picture())) return i;
             }
         }
-        String section=hit.section(), sample=hit.excerpt();
+        String section=hit.section(), sample=hit.sourceExcerpt();
         if (section.equals("모두 포함")) {
             String[] evidence=sample.split("\\R",3);
             if (evidence.length>=2 && evidence[0].contains("  ·  ")) {
