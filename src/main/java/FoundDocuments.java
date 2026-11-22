@@ -18,7 +18,7 @@ final class FoundDocuments extends JPanel {
     private final JButton search=new JButton();
     private final JLabel status=new JLabel();
     private final JPanel outcomes=new JPanel();
-    private JLabel emptyHint;
+    private JTextArea emptyHint;
     private boolean busy;
     private Consumer<List<String>> submit=notes->{};
     void onSearch(Consumer<List<String>> action){submit=action;}
@@ -54,15 +54,10 @@ final class FoundDocuments extends JPanel {
         actions.setOpaque(false);
         actions.add(ask);actions.add(search);footer.add(actions,BorderLayout.SOUTH);
         if(choices.isEmpty()){
-            // Nothing found yet: a centered hint instead of disabled actions pinned to the bottom.
-            var empty=new JPanel(new java.awt.GridBagLayout());
-            empty.setOpaque(false);
-            var hint=emptyHint=new JLabel("<html><div style='text-align:center'>질문을 보내면 답변에 쓰인 문서가 여기에 표시됩니다.<br>"
-                    +"골라서 질문 범위로 쓰거나 슬라이드를 더 찾을 수 있습니다.</div></html>",SwingConstants.CENTER);
-            hint.setFont(LibraryStyle.TYPE.deriveFont(13f));
-            hint.setForeground(LibraryStyle.MUTED);
-            empty.add(hint);
-            add(empty);
+            emptyHint=LibraryStyle.wrappedText("질문을 보내면 답변에 쓰인 문서가 여기에 표시됩니다.\n"
+                    +"문서를 골라 질문 범위로 쓰거나 슬라이드를 더 찾을 수 있습니다.",13,LibraryStyle.MUTED);
+            emptyHint.setBorder(BorderFactory.createEmptyBorder(18,16,12,16));
+            add(emptyHint,BorderLayout.CENTER);
         }else{
             var scroll=new JScrollPane(content);
             scroll.setBorder(null);
@@ -97,7 +92,7 @@ final class FoundDocuments extends JPanel {
     }
     void setStatus(String text){
         status.setText(text);status.setToolTipText(text);
-        // The empty panel hides the status line, so its centered hint carries the message instead.
+        // The empty panel hides the status line, so its hint carries the message instead.
         if(emptyHint!=null && !text.equals("질문을 보내면 찾은 문서가 표시됩니다."))emptyHint.setText(text);
     }
     void busy(boolean value){

@@ -232,17 +232,20 @@ public final class OfficeMarkdown {
         var preparationBody = LibraryStyle.panel(new BorderLayout(0,12),18);
         preparationBody.setOpaque(true);
         preparationBody.setBackground(Color.WHITE);
-        var preparationHint = new JLabel("<html><div style='width:460px'>보관함 PPTX의 장표 이미지를 연결된 에이전트에 보내 장표 설명을 만듭니다."
-                + " 이미지 검색과 대화에서 참고 장표를 더 잘 찾게 됩니다. 시작하면 대상 문서·장표 수를 보여 주고 진행 여부를 묻습니다."
-                + " 진행하면 AI 사용량이 발생합니다.</div></html>");
-        preparationHint.setFont(LibraryStyle.TYPE.deriveFont(13f));
-        preparationHint.setForeground(LibraryStyle.SECONDARY);
+        var preparationHint = LibraryStyle.wrappedText(
+                "장표 설명을 만들면 이미지 검색과 대화에서 그림의 내용으로 장표를 찾을 수 있습니다.\n\n"
+                + "1. 아래 버튼을 눌러 설명이 필요한 PPTX와 장표 수를 확인하세요.\n"
+                + "2. 진행을 승인하면 연결된 AI에 장표 이미지를 한 장씩 보냅니다. AI 사용량이 발생합니다.\n"
+                + "3. PPTX 한 파일을 마칠 때마다 설명을 저장합니다. 중단 후 다시 시작하면 완료한 파일은 건너뜁니다.",
+                13, LibraryStyle.SECONDARY);
+        preparationHint.setColumns(42);
+        preparationHint.setRows(9);
         preparationBody.add(preparationHint,BorderLayout.NORTH);
         preparationBody.add(referencePanel.controls());
         preparationDialog.setContentPane(preparationBody);
         preparationDialog.getRootPane().registerKeyboardAction(e -> preparationDialog.setVisible(false),
                 KeyStroke.getKeyStroke("ESCAPE"), JComponent.WHEN_IN_FOCUSED_WINDOW);
-        preparationDialog.setMinimumSize(new Dimension(560,170));
+        preparationDialog.setMinimumSize(new Dimension(560,360));
         prepareSlides.addActionListener(e -> {
             preparationDialog.pack();
             preparationDialog.setLocationRelativeTo(frame);

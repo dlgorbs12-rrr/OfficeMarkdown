@@ -23,6 +23,17 @@ final class LibraryStyle {
         return label;
     }
 
+    static JTextArea wrappedText(String text, int size, Color color) {
+        var area = new JTextArea(text);
+        area.setEditable(false);
+        area.setLineWrap(true);
+        area.setWrapStyleWord(true);
+        area.setOpaque(false);
+        area.setFont(TYPE.deriveFont((float) size));
+        area.setForeground(color);
+        return area;
+    }
+
     static JPanel panel(LayoutManager layout, int padding) {
         JPanel panel = new JPanel(layout);
         panel.setOpaque(false);
@@ -47,7 +58,7 @@ final class LibraryStyle {
         button.setFont(TYPE.deriveFont(primary ? Font.BOLD : Font.PLAIN, 13f));
         button.putClientProperty("FlatLaf.style", primary
                 ? "arc: 8; borderWidth: 0; focusWidth: 0; background: #b74323; foreground: #ffffff;"
-                + " hoverBackground: #9e391d; pressedBackground: #8f321a; disabledBackground: #e7d3cb"
+                + " focusedBackground: #b74323; hoverBackground: #9e391d; pressedBackground: #8f321a; disabledBackground: #e7d3cb"
                 : "arc: 8; focusWidth: 0; borderColor: #d6d2c4; hoverBorderColor: #b5b2a6; background: #ffffff;"
                 + " hoverBackground: #faf8f1; foreground: #25251f");
     }
