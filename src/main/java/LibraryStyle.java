@@ -185,7 +185,7 @@ final class LibraryStyle {
             picture.setVerticalAlignment(SwingConstants.TOP);
             row.add(picture, BorderLayout.WEST);
             int width = Math.max(80, list.getWidth() - icon.getIconWidth() - 32);
-            String detail = hit.picture() == null ? hit.section() : hit.picture().location();
+            String detail = java.util.Objects.requireNonNullElse(hit.picture() == null ? hit.section() : hit.picture().location(), "");
             String excerpt = SearchStudio.readable(hit.displayExcerpt());
             if (excerpt.equals(detail) || detail.endsWith(excerpt)) excerpt = "";
             var text = new JPanel();

@@ -81,7 +81,14 @@ final class AgentDialog extends JPanel {
         top.setBorder(BorderFactory.createEmptyBorder(0,2,0,0));
         var stateChip=new SearchStudio.Round(new FlowLayout(FlowLayout.LEFT,6,0),999,new Color(0xF1EFE7),null,0);
         stateChip.setBorder(BorderFactory.createEmptyBorder(4,10,4,12));
-        stateChip.add(new JLabel(dot(new Color(0x5B8A3A))));stateChip.add(state);
+        var stateDot=new JLabel(dot(LibraryStyle.MUTED));
+        stateChip.add(stateDot);stateChip.add(state);
+        // Green only once an answer came back; failures and missing setup turn the dot to the accent color.
+        state.addPropertyChangeListener("text",e->{
+            String text=state.getText();
+            stateDot.setIcon(dot(text.endsWith("답변 완료")?new Color(0x5B8A3A)
+                    :text.contains("못했")||text.contains("먼저")?LibraryStyle.ACCENT:LibraryStyle.MUTED));
+        });
         var stateRow=LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,0,0),0);
         stateRow.add(stateChip);
         top.add(stateRow,BorderLayout.WEST);

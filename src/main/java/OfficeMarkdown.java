@@ -108,6 +108,8 @@ public final class OfficeMarkdown {
     private SearchRequest lastSearch;
     private SearchRequest displayedSearch;
     private String lastSearchSummary = "";
+    /** Footer text of the last search, restored when leaving the agent screen. */
+    private String searchStatus = "";
     private List<String> activeWords = List.of();
 
     private record Thumbnail(Library.Hit hit, Icon icon, boolean cover) {}
@@ -293,11 +295,13 @@ public final class OfficeMarkdown {
             views.show(searchViews,"local");
             if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE) scope.setSelectedItem(keywordScope);
             else if (lastSearch == null) refresh(""); // Leave the single agent citation and restore search results.
+            else status.setText(searchStatus);
             updateReferenceContext();
             query.requestFocusInWindow();
         });
         imageMode.addActionListener(e -> {
             views.show(searchViews,"local");
+            if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE) status.setText(searchStatus);
             scope.setSelectedItem(SearchIndex.Scope.IMAGE);
             updateReferenceContext();
             query.requestFocusInWindow();
@@ -842,6 +846,7 @@ public final class OfficeMarkdown {
         if (parent == null) return source.toString();
         var parts = new ArrayList<String>();
         for (var part : parent) parts.add(part.toString());
+        if (parts.isEmpty()) return parent.toString(); // A file at the drive root.
         int from = Math.max(0, parts.size() - 5);
         return (from > 0 ? "… › " : "") + String.join(" › ", parts.subList(from, parts.size()));
     }
@@ -1212,9 +1217,9 @@ public final class OfficeMarkdown {
                 : "검색어를 줄이거나 전체 문서 목록을 확인하세요.");
         emptyButton.setText(showImport ? "파일 선택" : "전체 문서 보기");
         showHits(hits, previous);
-        status.setText(agentMode.isSelected() ? "Enter 보내기 · Shift+Enter 줄바꿈"
-                : summary + (hits.isEmpty() || galleryRequest() && !readingCard ? "Ctrl+F 검색창으로 이동"
-                : "Ctrl+F 검색창으로 이동 · 결과를 두 번 누르면 Markdown 뷰어로 엽니다"));
+        searchStatus = summary + (hits.isEmpty() || galleryRequest() && !readingCard ? "Ctrl+F 검색창으로 이동"
+                : "Ctrl+F 검색창으로 이동 · 결과를 두 번 누르면 Markdown 뷰어로 엽니다");
+        status.setText(agentMode.isSelected() ? "Enter 보내기 · Shift+Enter 줄바꿈" : searchStatus);
     }
 
     private void startIndexSync() {

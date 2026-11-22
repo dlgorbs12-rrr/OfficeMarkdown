@@ -48,6 +48,8 @@ final class FoundDocuments extends JPanel {
         outcomes.setLayout(new BoxLayout(outcomes,BoxLayout.Y_AXIS));
         content.add(rows,BorderLayout.NORTH);content.add(outcomes,BorderLayout.CENTER);
         var footer=new JPanel(new BorderLayout(0,5));
+        // Default panels paint the LAF grey; keep the whole tab on the white sidebar card.
+        for(var panel:List.of(rows,content,outcomes,footer))panel.setOpaque(false);
         footer.add(status,BorderLayout.NORTH);var actions=new JPanel(new java.awt.GridLayout(0,1,0,3));
         actions.setOpaque(false);
         actions.add(ask);actions.add(search);footer.add(actions,BorderLayout.SOUTH);
@@ -64,6 +66,7 @@ final class FoundDocuments extends JPanel {
         }else{
             var scroll=new JScrollPane(content);
             scroll.setBorder(null);
+            scroll.getViewport().setBackground(Color.WHITE);
             add(scroll);add(footer,BorderLayout.SOUTH);
             LibraryStyle.button(ask,false);LibraryStyle.button(search,true);
             status.setFont(LibraryStyle.TYPE.deriveFont(12f));
