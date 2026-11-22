@@ -90,6 +90,35 @@ def labels(rows, tasks, documents):
     return gold
 
 
+def graded_labels(rows, tasks, docs):
+    """One adjudicated row for every frozen task and page."""
+    versions = {d["source_id"]: d["version"] for d in docs}
+    expected = {(t, d["source_id"], n) for t in tasks for d in docs
+                for n in range(1, int(d["page_count"]) + 1)}
+    direct = {t: set() for t in tasks}
+    weak = {t: set() for t in tasks}
+    unreadable = set()
+    for r in rows:
+        t, source, page = r["task"], r["source_id"], int(r["page"])
+        key = (t, source, page)
+        if key not in expected or r["version"] != versions[source]:
+            raise ValueError("Unknown, duplicate or outdated judgment")
+        expected.remove(key)
+        grade = r["suitable"]
+        if grade == "yes":
+            direct[t].add((source, page))
+        elif grade == "weak":
+            weak[t].add((source, page))
+        elif grade == "unreadable":
+            unreadable.add(t)
+        elif grade != "no":
+            raise ValueError("Unknown grade")
+    if expected:
+        raise ValueError("Missing page judgments")
+    return direct, weak, unreadable
+
+
+
 def compare(frozen, out, java, classpath, product_b=False):
     documents = table(frozen / "documents.tsv")
     tasks = {row["task"]: row["query"] for row in table(frozen / "tasks.tsv")}
@@ -165,14 +194,20 @@ def compare(frozen, out, java, classpath, product_b=False):
     verify()
     if any(digest(frozen / p) != h for p, h in snapshot.items()):
         raise ValueError("Frozen files changed during evaluation")
-    gold = labels(table(frozen / "판정표.tsv"), tasks, documents)
+    judgments = table(frozen / "판정표.tsv")
+    excluded = set()
+    if judgments and "suitable" in judgments[0]:
+        gold, weak, unreadable = graded_labels(judgments, tasks, documents)
+        excluded = unreadable | {t for t in tasks if weak[t] and not gold[t]}
+    else:
+        gold = labels(judgments, tasks, documents)
     scores = []
     for task, variants in predictions.items():
         if set(variants["B"]) != set(variants["C"]):
             raise ValueError("C changed the B candidate population")
         for mode, results in variants.items():
             times = sorted(ms for t, m, run, ms in samples if (t, m) == (task, mode) and run > 0)
-            scores.append(dict(task=task, mode=mode, relevant=len(gold[task]), candidates=len(results),
+            scores.append(dict(task=task, mode=mode, relevant=None if task in excluded else len(gold[task]), candidates=len(results),
                                relevant_retrieved=len(set(results) & gold[task]),
                                rank=next((i for i, page in enumerate(results, 1) if page in gold[task]), None),
                                p50_ms=times[math.ceil(.5 * len(times))-1], p95_ms=times[math.ceil(.95 * len(times))-1]))
