@@ -2,19 +2,17 @@ import com.google.gson.*;
 import java.io.IOException;
 import java.util.*;
 import java.util.function.Consumer;
-import java.util.prefs.Preferences;
 import java.util.regex.Pattern;
 
 /** Reference-slide pilot. A search session always keeps its original question and focus. */
 final class ReferenceSearch {
-    private static final Preferences PREF = Preferences.userRoot().node("OfficeMarkdown/referenceSlides");
-    private static final Pattern SLIDE = Pattern.compile("장표|슬라이드|구성도|구조도|배치도|흐름도|아키텍처|(?:비교|절차) 그림|그림.{0,18}(있을까|필요|참고)|(?:장표|자료|사례|예시|절차).{0,15}(있을까|찾고 있)|화면.{0,18}(예시|참고|보여|찾)|한\\s*장.{0,12}(필요|보고|설명)|(?:참고|설명|발표).{0,20}(자료|사례|예시)|(?:참고|자료|예시|사례).{0,18}(필요|찾아|보여)|(?:pptx?|slide|architecture diagram)\\b",Pattern.CASE_INSENSITIVE);
+    private static final Pattern SLIDE = Pattern.compile("장표|슬라이드|구성도|구조도|배치도|흐름도|아키텍처|"
+            + "(?:비교|절차) 그림|그림.{0,18}(있을까|필요|참고)|한\\s*장.{0,12}(필요|보고|설명)|"
+            + "(?:pptx?|slides?|architecture diagram)\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern EXACT = Pattern.compile("(?i)(?:\\b[A-Z]{2,8}-[0-9]+\\b|\\b[A-Z]{1,3}[1-9][0-9]*\\b|엑셀|스프레드시트|\\.xlsx?\\b)");
     private static final int LIMIT = 4;
     record Recommendation(ReferenceIndex.Page page, String reason, String quote) {}
     record Trace(List<ReferenceIndex.Page> candidates,List<ReferenceIndex.Page> inspected,List<Recommendation> recommended) {}
-    static boolean enabled() { return PREF.getBoolean("enabled",Boolean.getBoolean("officemd.referencePilot")); }
-    static void enabled(boolean value) { PREF.putBoolean("enabled",value); }
     static boolean requested(String question) {
         return question!=null && question.length()<=1200 && !EXACT.matcher(question).find() && SLIDE.matcher(question).find();
     }
@@ -30,6 +28,10 @@ final class ReferenceSearch {
         return evaluate(question,focus,judge,status).recommended();
     }
     static Trace evaluate(String question,SearchIndex.Focus focus,DocumentAgent.Ask agent,Consumer<String> status) throws Exception {
+        return evaluate(question,focus,agent,status,null);
+    }
+
+    static Trace evaluate(String question,SearchIndex.Focus focus,DocumentAgent.Ask agent,Consumer<String> status,List<String> notes) throws Exception {
         if(question==null || question.isBlank() || question.length()>1200) throw new IOException("질문을 1~1200자로 입력하세요.");
         status.accept("장표 색인 확인 중…");
         if(Thread.interrupted())throw new InterruptedException();
@@ -44,7 +46,7 @@ final class ReferenceSearch {
             if(terms.size()==8)break;
         }
         if(Thread.interrupted())throw new InterruptedException();
-        var ranked=ReferenceIndex.searchDetailed(question+" "+String.join(" ",terms),focus);
+        var ranked=ReferenceIndex.searchDetailed(question+" "+String.join(" ",terms),focus,notes);
         var candidates=ranked.pages();
         var inspected=new ArrayList<ReferenceIndex.Page>();
         var originals=new HashMap<java.nio.file.Path,ReferenceOriginal.Content>();

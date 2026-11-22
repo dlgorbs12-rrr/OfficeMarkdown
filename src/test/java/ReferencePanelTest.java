@@ -31,14 +31,11 @@ class ReferencePanelTest {
         var staleStatus = new CountDownLatch(1);
         var panel = onEdt(() -> {
             var view = new ReferencePanel(hit -> fail("Unexpected file open"));
-            view.setAvailable(true);
-            var option = option(view);
-            option.setSelected(false);
-            view.search(progress -> { throw new AssertionError("Search ran without opt-in"); });
+            view.setAvailable(false);
+            view.search(progress -> { throw new AssertionError("Unavailable result action ran"); });
             assertFalse(view.isWorking());
             assertFalse(view.isVisible());
-            // Change the component state without saving test settings to the user's preferences.
-            option.setSelected(true);
+            view.setAvailable(true);
             view.search(progress -> {
                 started.countDown();
                 try {
@@ -108,7 +105,7 @@ class ReferencePanelTest {
         var panel = onEdt(() -> {
             var view = new ReferencePanel(hit -> { target.set(hit); opened.countDown(); });
             view.setAvailable(true);
-            option(view).setSelected(true);
+
             var preview = find(view, JLabel.class,
                     label -> "선택한 장표 미리보기".equals(label.getAccessibleContext().getAccessibleName()));
             assertNotNull(preview);
@@ -143,12 +140,6 @@ class ReferencePanelTest {
         } finally {
             onEdt(() -> { panel.reset(); return null; });
         }
-    }
-
-    private static JCheckBox option(ReferencePanel panel) {
-        var option = find(panel.controls(), JCheckBox.class, box -> box.getText().equals("AI 참고 장표"));
-        assertNotNull(option);
-        return option;
     }
 
     private static JButton openButton(ReferencePanel panel) {

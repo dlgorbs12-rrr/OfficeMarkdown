@@ -48,14 +48,12 @@ public final class OfficeIndexMcp {
         tool("read_evidence","Read indexed section text or image OCR from a candidate. For reference-based drafting, cite the returned title, section and source_uri when present. Optional section is exact, query is a literal substring, field is body (default) or image. Returns citation IDs.",List.of("document"),"document","section","query","field")
     );
     private List<?> availableTools(){
-        if(!ReferenceSearch.enabled())return TOOLS;
         var tools=new ArrayList<Object>(TOOLS);
         tools.add(tool(SLIDE_TOOLS.get(0),"Search visible PPTX pages by natural-language topic and source-bound descriptions. Returns up to 20 ranked page handles. Use top four to inspect original evidence. Handles expire on the next reference search.",List.of("query"),"query"));
         tools.add(tool(SLIDE_TOOLS.get(1),"Read and verify one original-version slide from the last reference search. Returns evidence for this exact page.",List.of("page"),"page"));
         return tools;
     }
     private List<?> referenceCall(String name,JsonObject args) throws Exception {
-        if(!ReferenceSearch.enabled())throw new IllegalArgumentException("AI 참고 장표가 꺼져 있습니다.");
         if(name.equals(SLIDE_TOOLS.get(0))){
             slideHandles.clear();
             String query=string(args,"query").strip();

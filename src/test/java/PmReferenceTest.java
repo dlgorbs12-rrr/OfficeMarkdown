@@ -76,8 +76,10 @@ class PmReferenceTest {
         SearchIndex.setDocumentRole(relabelled, "어댑터 설계서");
         assertEquals(1, McpSearch.chat(null,root,query,"","",null,new SearchIndex.Focus(relabelled,null),p->{}).sources().size());
         String followUp = "AD 어댑터 설계서 참고 자료 찾아줘";
-        assertEquals(McpSearch.Route.CHAT,McpSearch.route(followUp,"이후 검색은 A 프로젝트 문서 안에서만 해줘",AdapterDiscovery.plan(followUp),true));
-        assertEquals(McpSearch.Route.ADAPTER,McpSearch.route(followUp,"",AdapterDiscovery.plan(followUp),true));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route(followUp,"이후 검색은 A 프로젝트 문서 안에서만 해줘",AdapterDiscovery.plan(followUp)));
+        assertEquals(McpSearch.Route.ADAPTER,McpSearch.route(followUp,"",AdapterDiscovery.plan(followUp)));
+        assertEquals(McpSearch.Route.CHAT,McpSearch.route("정책 설계서 참고 자료 찾아줘","",null));
+        assertEquals(McpSearch.Route.SLIDES,McpSearch.route("착수보고서에 쓸 시스템 구성도 잘된 거 찾아줘","",null));
         assertNull(AdapterDiscovery.plan("시스템 구성도 잘된 거 찾아줘"));
     }
 
