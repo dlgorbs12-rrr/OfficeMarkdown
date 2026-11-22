@@ -1,4 +1,5 @@
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.nio.file.Path;
 import java.util.*;
@@ -17,12 +18,14 @@ final class FoundDocuments extends JPanel {
     private final JButton search=new JButton();
     private final JLabel status=new JLabel();
     private final JPanel outcomes=new JPanel();
+    private JLabel emptyHint;
     private boolean busy;
     private Consumer<List<String>> submit=notes->{};
     void onSearch(Consumer<List<String>> action){submit=action;}
 
     FoundDocuments(List<Library.Hit> candidates){
         super(new BorderLayout(0,6));
+        setBackground(Color.WHITE);
         var rows=new JPanel();
         rows.setLayout(new BoxLayout(rows,BoxLayout.Y_AXIS));
         for(var hit:candidates){
@@ -46,8 +49,26 @@ final class FoundDocuments extends JPanel {
         content.add(rows,BorderLayout.NORTH);content.add(outcomes,BorderLayout.CENTER);
         var footer=new JPanel(new BorderLayout(0,5));
         footer.add(status,BorderLayout.NORTH);var actions=new JPanel(new java.awt.GridLayout(0,1,0,3));
+        actions.setOpaque(false);
         actions.add(ask);actions.add(search);footer.add(actions,BorderLayout.SOUTH);
-        add(new JScrollPane(content));add(footer,BorderLayout.SOUTH);
+        if(choices.isEmpty()){
+            // Nothing found yet: a centered hint instead of disabled actions pinned to the bottom.
+            var empty=new JPanel(new java.awt.GridBagLayout());
+            empty.setOpaque(false);
+            var hint=emptyHint=new JLabel("<html><div style='text-align:center'>질문을 보내면 답변에 쓰인 문서가 여기에 표시됩니다.<br>"
+                    +"문서를 골라 질문 범위로 쓰거나 PPTX에서 슬라이드를 더 찾을 수 있습니다.</div></html>",SwingConstants.CENTER);
+            hint.setFont(LibraryStyle.TYPE.deriveFont(13f));
+            hint.setForeground(LibraryStyle.MUTED);
+            empty.add(hint);
+            add(empty);
+        }else{
+            var scroll=new JScrollPane(content);
+            scroll.setBorder(null);
+            add(scroll);add(footer,BorderLayout.SOUTH);
+            LibraryStyle.button(ask,false);LibraryStyle.button(search,true);
+            status.setFont(LibraryStyle.TYPE.deriveFont(12f));
+            status.setForeground(LibraryStyle.MUTED);
+        }
         status.setText(choices.isEmpty()?"질문을 보내면 찾은 문서가 표시됩니다.":SELECTION_HINT);
         ask.addActionListener(e->useScope.accept(checked.stream().map(Path::toString).toList()));
         search.addActionListener(e->submit.accept(checked.stream().filter(presentations::contains).map(Path::toString).toList()));
@@ -71,7 +92,11 @@ final class FoundDocuments extends JPanel {
         }
         outcomes.revalidate();outcomes.repaint();
     }
-    void setStatus(String text){status.setText(text);status.setToolTipText(text);}
+    void setStatus(String text){
+        status.setText(text);status.setToolTipText(text);
+        // The empty panel hides the status line, so its centered hint carries the message instead.
+        if(emptyHint!=null && !text.equals("질문을 보내면 찾은 문서가 표시됩니다."))emptyHint.setText(text);
+    }
     void busy(boolean value){
         busy=value;
         if(value)clearDeckResults();

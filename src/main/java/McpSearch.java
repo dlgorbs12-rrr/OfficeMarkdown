@@ -65,7 +65,7 @@ final class McpSearch {
         var docs=ranked.pages().stream().map(ReferenceIndex.Page::hit).toList();
         if(docs.isEmpty() && ranked.unavailable())throw new IOException("후보 문서의 원본을 확인하지 못했습니다.");
         return new Reply(docs.isEmpty()?"현재 범위에서 관련 발표 자료를 찾지 못했습니다.":
-                "발표 자료 "+docs.size()+"개를 찾았습니다. 대화에서 찾은 문서에서 PPTX를 선택해 슬라이드를 확인하세요.",
+                "발표 자료 "+docs.size()+"개를 찾았습니다. 찾은 문서 탭에서 PPTX를 선택해 슬라이드를 확인하세요.",
                 List.of(),docs,expanded);
     }
 

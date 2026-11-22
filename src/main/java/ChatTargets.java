@@ -24,17 +24,35 @@ final class ChatTargets extends JPanel {
         public Object getValueAt(int r,int c){var doc=rows.get(r);return c==0?checked.contains(doc.md()):doc.title();}
         public void setValueAt(Object value,int r,int c){
             if(Boolean.TRUE.equals(value))checked.add(rows.get(r).md());else checked.remove(rows.get(r).md());
-            fireTableCellUpdated(r,c);changed.run();
+            fireTableCellUpdated(r,c);count();changed.run();
         }
     };
     private final JTable table=new JTable(model);
+    private int total;
     private SwingWorker<List<Doc>,Void> loading;
     ChatTargets(Runnable changed,Consumer<Doc> preview){
         super(new BorderLayout(4,6)); this.changed=changed;
-        filter.putClientProperty("JTextField.placeholderText","검색 대상 문서명 찾기");
-        filter.getAccessibleContext().setAccessibleName("검색 대상 문서명 찾기");
+        setBackground(Color.WHITE);setBorder(BorderFactory.createEmptyBorder(8,0,0,0));
+        filter.putClientProperty("JTextField.placeholderText","문서 이름 찾기");
+        filter.putClientProperty("JTextField.showClearButton",true);
+        filter.getAccessibleContext().setAccessibleName("질문 범위 문서 이름 찾기");
         table.getColumnModel().getColumn(0).setMaxWidth(44);
-        table.setRowHeight(28);table.setShowGrid(false);
+        table.setRowHeight(46);table.setShowGrid(false);table.setShowHorizontalLines(true);
+        table.setGridColor(LibraryStyle.SOFT_LINE);table.setIntercellSpacing(new Dimension(0,1));
+        ((javax.swing.table.DefaultTableCellRenderer)table.getTableHeader().getDefaultRenderer())
+                .setHorizontalAlignment(SwingConstants.LEFT);
+        // Same-named files are told apart by the folder shown under the title.
+        table.getColumnModel().getColumn(1).setCellRenderer(new javax.swing.table.DefaultTableCellRenderer(){
+            public Component getTableCellRendererComponent(JTable t,Object value,boolean selected,boolean focus,int r,int c){
+                super.getTableCellRendererComponent(t,value,selected,false,r,c);
+                var doc=rows.get(t.convertRowIndexToModel(r));
+                setText("<html><div style='color:#25251f'>"+LibraryStyle.escape(doc.title())+"</div>"
+                        +"<div style='font-size:9pt;color:#706e62'>"+LibraryStyle.escape(folder(doc.source()))+"</div></html>");
+                setToolTipText(doc.source());
+                setVerticalAlignment(SwingConstants.CENTER);
+                return this;
+            }
+        });
         var sorter=new TableRowSorter<>(model);
         sorter.setSortable(0,false);table.setRowSorter(sorter);
         filter.getDocument().addDocumentListener(new javax.swing.event.DocumentListener(){
@@ -53,7 +71,15 @@ final class ChatTargets extends JPanel {
         add(filter,BorderLayout.NORTH);add(new JScrollPane(table));add(status,BorderLayout.SOUTH);
     }
     List<String> selection(){return List.copyOf(checked);}
-    void select(List<String> notes){checked.clear();checked.addAll(notes);filter.setText("");model.fireTableDataChanged();}
+    void select(List<String> notes){checked.clear();checked.addAll(notes);filter.setText("");model.fireTableDataChanged();count();}
+    private void count(){status.setText(total==0?"문서 없음":"선택 "+checked.size()+" / 문서 "+total+"개");}
+    static String folder(String source){
+        if(source==null||source.isBlank())return "";
+        try{
+            var parent=Path.of(source).getParent();
+            return parent==null?"":OfficeMarkdown.breadcrumb(Path.of(source));
+        }catch(RuntimeException e){return "";}
+    }
     void refresh(){
         if(loading!=null)loading.cancel(true);
         loading=new SwingWorker<>(){
@@ -70,7 +96,7 @@ final class ChatTargets extends JPanel {
                 if(this!=loading)return;
                 try{var data=get();rows.clear();
                     for(var doc:data)if(checked.contains(doc.md()))rows.add(doc);
-                    for(var doc:data)if(!checked.contains(doc.md()))rows.add(doc);model.fireTableDataChanged();status.setText("문서 "+data.size()+"개");}
+                    for(var doc:data)if(!checked.contains(doc.md()))rows.add(doc);total=data.size();model.fireTableDataChanged();count();}
                 catch(Exception ex){status.setText("검색 대상 목록을 읽을 수 없습니다.");}
             }
         };loading.execute();

@@ -74,13 +74,19 @@ final class AgentDialog extends JPanel {
         super(new BorderLayout());
         this.library=library;
         providers.setSelectedItem(AgentConnection.preferred());
-        JPanel body=LibraryStyle.panel(new BorderLayout(0,12),16);
+        JPanel body=LibraryStyle.panel(new BorderLayout(0,8),0);
         body.setOpaque(true);body.setBackground(PAPER);
-        JPanel top=LibraryStyle.panel(new BorderLayout(0,8),0);
-        top.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0,0,1,0,LibraryStyle.LINE),BorderFactory.createEmptyBorder(0,0,12,0)));
-        top.add(LibraryStyle.label("에이전트 대화",24,true,LibraryStyle.INK));
-        var headerActions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,10,0),0);
-        headerActions.add(state);headerActions.add(newChat);
+        // The mode toggle already names this screen, so the header only carries the connection state.
+        JPanel top=LibraryStyle.panel(new BorderLayout(0,0),0);
+        top.setBorder(BorderFactory.createEmptyBorder(0,2,0,0));
+        var stateChip=new SearchStudio.Round(new FlowLayout(FlowLayout.LEFT,6,0),999,new Color(0xF1EFE7),null,0);
+        stateChip.setBorder(BorderFactory.createEmptyBorder(4,10,4,12));
+        stateChip.add(new JLabel(dot(new Color(0x5B8A3A))));stateChip.add(state);
+        var stateRow=LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,0,0),0);
+        stateRow.add(stateChip);
+        top.add(stateRow,BorderLayout.WEST);
+        var headerActions=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
+        headerActions.add(newChat);
         top.add(headerActions,BorderLayout.EAST);
         newChat.setEnabled(false);
         newChat.addActionListener(e->{
@@ -172,12 +178,15 @@ final class AgentDialog extends JPanel {
             var c=selected;
             if(c!=null)actOnCurrent(c,preview);
         });
-        sidebar.setBorder(BorderFactory.createEmptyBorder(12,12,12,12));
+        sidebar.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(LibraryStyle.LINE),
+                BorderFactory.createEmptyBorder(4,8,8,8)));
+        sidebar.setBackground(Color.WHITE);sidebar.setOpaque(true);
+        documentTabs.putClientProperty("FlatLaf.style",LibraryStyle.TABS);
         sidebar.setPreferredSize(new Dimension(360,320));
         sidebar.setMinimumSize(new Dimension(245,120));
-        documentTabs.addTab("대화에서 찾은 문서",foundTab);
+        documentTabs.addTab("찾은 문서",foundTab);
         resetFound();
-        documentTabs.addTab("대화 출처",documents);
+        documentTabs.addTab("출처",documents);
         documentTabs.addTab("질문 범위",targets);
         documentTabs.addChangeListener(e->{if(documentTabs.getSelectedComponent()==targets)targets.refresh();});
         sidebar.add(documentTabs);
@@ -186,7 +195,7 @@ final class AgentDialog extends JPanel {
         chatColumn.add(threadScroll);
         results.setLeftComponent(chatColumn);
         results.setRightComponent(sidebar);
-        results.setDividerSize(8);
+        results.setDividerSize(10);
         results.setResizeWeight(0.65);
         result.add(results);body.add(result);
         var composer=new SearchStudio.Round(new BorderLayout(0,3),14,Color.WHITE,LibraryStyle.LINE,1);
@@ -195,7 +204,7 @@ final class AgentDialog extends JPanel {
         var scopeLabel=LibraryStyle.label("검색 범위",12,true,LibraryStyle.MUTED);
         scopeLabel.setLabelFor(scopes);
         scopes.setFont(LibraryStyle.TYPE.deriveFont(12f));
-        scopes.setBackground(new Color(0xEEF2E7));
+        scopes.setBackground(new Color(0xF6F4EC));
         scopes.setPrototypeDisplayValue(new ScopeChoice("이 구역만 · 운영 가이드.xlsx › 검토 절차",null));
         scopes.getAccessibleContext().setAccessibleName("검색 범위");
         scopes.addActionListener(e->{
@@ -244,13 +253,10 @@ final class AgentDialog extends JPanel {
             public void actionPerformed(java.awt.event.ActionEvent e){if(ask.isEnabled())runQuestion();}
         });
         LibraryStyle.button(ask,true);
-        ask.putClientProperty("JButton.buttonType",null);
-        ask.putClientProperty("FlatLaf.style","arc: 8");
-        ask.setText("보내기 ↑");ask.setToolTipText("보내기 · Enter");
+        ask.setText("보내기");ask.setToolTipText("보내기 · Enter");
         ask.getAccessibleContext().setAccessibleName("보내기");
         ask.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD,13f));
-        ask.setMargin(new Insets(3,9,3,9));
-        ask.setBackground(SearchStudio.HOT);
+        ask.setMargin(new Insets(4,14,4,14));
         LibraryStyle.button(newChat,false);
         LibraryStyle.button(modelButton,false);
         modelButton.setContentAreaFilled(false);
@@ -274,10 +280,53 @@ final class AgentDialog extends JPanel {
 
     void focusQuestion() { if(documentTabs.getSelectedComponent()==targets)targets.refresh();question.requestFocusInWindow(); }
 
-    private final JLabel welcome=LibraryStyle.label("에이전트와 어떤 작업을 할까요?",18,true,LibraryStyle.INK);
+    private static final List<String> EXAMPLES=List.of(
+            "착수보고서에 쓸 시스템 구성도 잘된 거 찾아줘",
+            "AD 어댑터 설계 초본을 만들기 위한 자료 탐색");
+    /** Empty-conversation guide, centered in the thread with example requests that fill the composer. */
+    private final JPanel welcome=new JPanel(new GridBagLayout()){
+        public Dimension getPreferredSize(){
+            // Width 0: the viewport stretches it, so the guide never forces a horizontal scrollbar.
+            var size=super.getPreferredSize();
+            return new Dimension(0,Math.max(size.height,threadScroll.getViewport().getHeight()));
+        }
+        public Dimension getMaximumSize(){return new Dimension(Integer.MAX_VALUE,getPreferredSize().height);}
+    };
+    {
+        welcome.setOpaque(false);
+        welcome.setAlignmentX(Component.LEFT_ALIGNMENT);
+        var guide=LibraryStyle.panel(new GridBagLayout(),0);
+        var at=new GridBagConstraints();at.gridx=0;at.insets=new Insets(4,0,4,0);
+        var title=LibraryStyle.label("보관함 문서로 무엇을 할까요?",20,true,LibraryStyle.INK);
+        guide.add(title,at);
+        guide.add(LibraryStyle.label("찾고 싶은 자료나 만들 문서를 설명하면 근거 문서와 장표를 찾아 답합니다.",13,false,LibraryStyle.MUTED),at);
+        var examples=LibraryStyle.panel(new GridLayout(0,1,0,6),0);
+        for(String example:EXAMPLES){
+            var button=new JButton(example);
+            button.putClientProperty("html.disable",true);
+            LibraryStyle.button(button,false);
+            button.setToolTipText("입력창에 넣기");
+            button.addActionListener(e->{question.setText(example);focusQuestion();});
+            examples.add(button);
+        }
+        at.insets=new Insets(14,0,0,0);
+        guide.add(examples,at);
+        welcome.add(guide);
+    }
+
+    private static Icon dot(Color color){
+        return new Icon(){
+            public int getIconWidth(){return 8;}
+            public int getIconHeight(){return 8;}
+            public void paintIcon(Component c,Graphics graphics,int x,int y){
+                var g=(Graphics2D)graphics.create();
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setColor(color);g.fillOval(x,y,8,8);g.dispose();
+            }
+        };
+    }
 
     private void showWelcome(){
-        welcome.setBorder(BorderFactory.createEmptyBorder(24,16,12,16));
         conversation.add(welcome);
         conversation.revalidate();
         conversation.repaint();
@@ -730,7 +779,7 @@ final class AgentDialog extends JPanel {
         var provider=(DocumentAgent.Provider)providers.getSelectedItem();
         String model=modelId;
         try{provider.executable();}catch(java.io.IOException e){
-            state.setText("에이전트 설정에서 CLI를 먼저 연결하세요.");
+            state.setText("에이전트 연결 설정에서 CLI를 먼저 연결하세요.");
             if(AgentSettingsDialog.open(SwingUtilities.getWindowAncestor(this),provider)!=null)selectDefault();
             return;
         }

@@ -29,7 +29,7 @@ final class ChatDocuments extends JPanel {
         super(new BorderLayout(0, 10));
         setOpaque(false);
         var header = LibraryStyle.panel(new BorderLayout(8, 10), 0);
-        header.add(LibraryStyle.label("대화 문서", 19, true, LibraryStyle.INK));
+        header.add(LibraryStyle.label("출처", 15, true, LibraryStyle.INK));
         header.add(count, BorderLayout.EAST);
         filter.putClientProperty("JTextField.placeholderText", "문서명, 구역, 인용문 검색");
         filter.getAccessibleContext().setAccessibleName("대화 문서 검색");

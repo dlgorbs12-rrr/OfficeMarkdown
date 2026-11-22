@@ -19,24 +19,40 @@ final class AgentSettingsDialog extends JDialog {
     }
     private DocumentAgent.Provider selected(){return (DocumentAgent.Provider)agents.getSelectedItem();}
     private AgentSettingsDialog(Window parent,DocumentAgent.Provider selected){
-        super(parent,"에이전트 설정",ModalityType.APPLICATION_MODAL);
+        super(parent,"에이전트 연결 설정",ModalityType.APPLICATION_MODAL);
         var panel=LibraryStyle.panel(new GridBagLayout(),18);
         GridBagConstraints c=new GridBagConstraints();c.gridx=0;c.weightx=1;c.fill=GridBagConstraints.HORIZONTAL;
         c.anchor=GridBagConstraints.WEST;c.insets=new Insets(4,0,4,0);
-        agents.setSelectedItem(selected); panel.add(agents,c);
-        panel.add(LibraryStyle.label("1   CLI 설치",16,true,LibraryStyle.INK),c);
+        agents.setSelectedItem(selected);
+        var agentRow=LibraryStyle.panel(new BorderLayout(10,0),0);
+        agentRow.add(LibraryStyle.label("연결할 에이전트",13,true,LibraryStyle.INK),BorderLayout.WEST);agentRow.add(agents);
+        panel.add(agentRow,c);
+        c.insets=new Insets(14,0,4,0);
+        panel.add(step("1","CLI 설치"),c);
+        c.insets=new Insets(4,0,4,0);
         panel.add(guideText,c);
         location.setEditable(false);panel.add(location,c);
         var browser=new JButton("공식 설치 안내");var browse=new JButton("실행 파일 지정");var auto=new JButton("자동 탐색");
         panel.add(row(browser,browse,auto),c);
-        panel.add(LibraryStyle.label("2   계정 연결",16,true,LibraryStyle.INK),c);
+        c.insets=new Insets(14,0,4,0);
+        panel.add(step("2","계정 연결"),c);
+        c.insets=new Insets(4,0,4,0);
         panel.add(auth,c);panel.add(row(login,refresh),c);
-        panel.add(LibraryStyle.label("3   문서 질문 연결 확인",16,true,LibraryStyle.INK),c);
-        panel.add(new JLabel("선택한 에이전트에 짧은 테스트 문구를 보내 응답을 확인합니다."),c);
+        c.insets=new Insets(14,0,4,0);
+        panel.add(step("3","문서 질문 연결 확인"),c);
+        c.insets=new Insets(4,0,4,0);
+        panel.add(LibraryStyle.label("선택한 에이전트에 짧은 테스트 문구를 보내 응답을 확인합니다.",13,false,LibraryStyle.SECONDARY),c);
         panel.add(test,c);panel.add(row(probe),c);
+        for(var button:java.util.List.of(browser,browse,auto,login,refresh,probe))LibraryStyle.button(button,false);
         var use=new JButton("기본 에이전트로 저장");LibraryStyle.button(use,true);
-        var close=new JButton("닫기");panel.add(row(use,close),c);
+        var close=new JButton("닫기");LibraryStyle.button(close,false);
+        var footer=LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
+        footer.add(close);footer.add(use);
+        c.weighty=1;c.anchor=GridBagConstraints.SOUTH;c.insets=new Insets(16,0,0,0);
+        panel.add(footer,c);
+        panel.setOpaque(true);panel.setBackground(Color.WHITE);
         setContentPane(panel);setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        getRootPane().registerKeyboardAction(e->dispose(),KeyStroke.getKeyStroke("ESCAPE"),JComponent.WHEN_IN_FOCUSED_WINDOW);
         agents.addActionListener(e->inspect());
         browser.addActionListener(e->{try{Desktop.getDesktop().browse(AgentConnection.guide(selected()));}catch(Exception ex){message(ex);}});
         browse.addActionListener(e->{
@@ -57,13 +73,28 @@ final class AgentSettingsDialog extends JDialog {
         });
         use.addActionListener(e->{AgentConnection.prefer(selected());saved=true;dispose();});
         close.addActionListener(e->dispose());
-        setSize(630,535);setMinimumSize(new Dimension(580,530));setLocationRelativeTo(parent);inspect();
+        setSize(640,600);setMinimumSize(new Dimension(580,560));setLocationRelativeTo(parent);inspect();
+    }
+    private static JPanel step(String number,String title){
+        var p=LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,8,0),0);
+        var badge=new JLabel(number,SwingConstants.CENTER){
+            protected void paintComponent(Graphics graphics){
+                var g=(Graphics2D)graphics.create();
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setColor(LibraryStyle.INK);g.fillOval(0,0,getWidth()-1,getHeight()-1);g.dispose();
+                super.paintComponent(graphics);
+            }
+        };
+        badge.setForeground(Color.WHITE);badge.setFont(LibraryStyle.TYPE.deriveFont(Font.BOLD,11f));
+        badge.setPreferredSize(new Dimension(20,20));
+        p.add(badge);p.add(LibraryStyle.label(title,15,true,LibraryStyle.INK));
+        return p;
     }
     private JPanel row(JButton... buttons){
         JPanel p=LibraryStyle.panel(new FlowLayout(FlowLayout.LEFT,5,0),0);
         for(JButton b:buttons)p.add(b);return p;
     }
-    private void message(Exception ex){JOptionPane.showMessageDialog(this,ex.getMessage(),"에이전트 설정",JOptionPane.INFORMATION_MESSAGE);}
+    private void message(Exception ex){JOptionPane.showMessageDialog(this,ex.getMessage(),"에이전트 연결 설정",JOptionPane.INFORMATION_MESSAGE);}
     private void inspect(){
         if(worker!=null)worker.cancel(true);
         var p=selected();test.setText("연결 테스트 전");
