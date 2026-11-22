@@ -262,7 +262,7 @@ final class AgentDialog extends JPanel {
         };
     }
 
-    void focusQuestion() { question.requestFocusInWindow(); }
+    void focusQuestion() { if(documentTabs.getSelectedComponent()==targets)targets.refresh();question.requestFocusInWindow(); }
 
     private final JLabel welcome=LibraryStyle.label("에이전트와 어떤 작업을 할까요?",18,true,LibraryStyle.INK);
 
