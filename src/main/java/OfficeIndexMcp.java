@@ -7,7 +7,18 @@ import java.util.*;
 /** Stdio search server. Candidate handles belong to the connected client session. */
 public final class OfficeIndexMcp {
     static final Gson JSON=new Gson();
-    record Row(String md,String source,String title,String section,String text,String picture,String location) {}
+    record Row(String md,String source,String title,String section,String text,String picture,String location,
+               int slide,String version,String sha256) {
+        Row(String md,String source,String title,String section,String text,String picture,String location) {
+            this(md,source,title,section,text,picture,location,0,null,null);
+        }
+        ReferenceIndex.Page currentPage(Library.Hit hit) throws IOException {
+            if(slide==0)return null;
+            var page=new ReferenceIndex.Page(hit,slide,version,text,sha256);
+            if(!ReferenceIndex.current(page))throw new IOException("인용한 장표가 변경됐습니다. 다시 검색하세요.");
+            return page;
+        }
+    }
     private final Path session;
     private final String focus,section;
     private final List<String> documents=new ArrayList<>();
@@ -75,7 +86,7 @@ public final class OfficeIndexMcp {
         page=ReferenceOriginal.verified(page,new HashMap<>());
         var hit=page.hit();
         var id="E"+(++evidence);
-        var row=new Row(hit.md().toString(),hit.source().toString(),hit.title(),hit.section(),ReferenceSearch.snippet(page.text()),"","");
+        var row=new Row(hit.md().toString(),hit.source().toString(),hit.title(),hit.section(),ReferenceSearch.snippet(page.text()),"","",page.number(),page.version(),page.sha256());
         var result=new LinkedHashMap<String,Object>(Map.of("id",id,"title",row.title(),"section",row.section(),"text",row.text(),"number",page.number(),"version",page.version()));
         if(session==null)result.put("source_uri",hit.source().toUri().toASCIIString());
         else Files.writeString(session.resolve(id),JSON.toJson(row),StandardOpenOption.CREATE_NEW);

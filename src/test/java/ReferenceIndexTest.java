@@ -46,7 +46,14 @@ class ReferenceIndexTest {
         var scoped=ReferenceIndex.searchDetailed("구성도",null,List.of(note.toString()));
         assertEquals(List.of(a),scoped.pages().stream().map(page->page.hit().source()).toList());
         assertTrue(ReferenceIndex.searchDetailed("구성도",null,List.of()).pages().isEmpty());
+        var page=scoped.pages().getFirst();
+        var server=new OfficeIndexMcp.Row(note.toString(),a.toString(),"a","슬라이드 1",page.text(),"","",
+                page.number(),page.version(),page.sha256());
+        var restored=OfficeIndexMcp.JSON.fromJson(OfficeIndexMcp.JSON.toJson(server),OfficeIndexMcp.Row.class);
+        assertEquals(page,restored.currentPage(page.hit()));
         assertEquals(2,ReferenceWiki.plan().stream().mapToInt(ReferenceWiki.Target::slides).sum());
+        Files.delete(a);
+        assertThrows(IOException.class,()->restored.currentPage(page.hit()));
     }
 
     @Test void searchesTruePartialWordsAndScopesEachPage() throws Exception {

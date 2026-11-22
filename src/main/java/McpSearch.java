@@ -116,7 +116,8 @@ final class McpSearch {
                 var row=OfficeIndexMcp.JSON.fromJson(Files.readString(session.resolve(id)),OfficeIndexMcp.Row.class);
                 var pic=row.picture().isEmpty()?null:new PictureAssets.Reference(row.picture(),row.location());
                 var hit=new Library.Hit(Path.of(row.md()),Path.of(row.source()),row.title(),row.section(),row.text(),pic);
-                sources.add(new DocumentAgent.Claim(id,hit));
+                var page=row.currentPage(hit);
+                sources.add(page==null ? new DocumentAgent.Claim(id,hit) : new DocumentAgent.Claim(id,hit,List.of(),List.of(),"",page));
             }
             return new Reply(reply,List.copyOf(sources));
         }finally{
@@ -160,7 +161,7 @@ final class McpSearch {
                 var picture=r.picture().isEmpty()?null:new PictureAssets.Reference(r.picture(),r.location());
                 var hit=new Library.Hit(Path.of(r.md()),Path.of(r.source()),r.title(),r.section(),r.text(),picture);
                 answer.add(new DocumentAgent.Claim(OfficeIndexMcp.string(obj,"reason"),hit,
-                        List.of(new SearchIndex.Evidence(0,"",picture==null?"구역 원문":"그림 OCR",quote)),List.of(),OfficeIndexMcp.string(obj,"use")));
+                        List.of(new SearchIndex.Evidence(0,"",picture==null?"구역 원문":"그림 OCR",quote)),List.of(),OfficeIndexMcp.string(obj,"use"),r.currentPage(hit)));
                 if(answer.size()==3)break;
             }
             if(!items.isEmpty() && answer.isEmpty())throw new IOException("추천 결과의 인용을 색인 원문에서 확인하지 못했습니다.");
