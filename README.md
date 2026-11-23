@@ -4,6 +4,8 @@ Windows에서 PowerPoint, Excel, Word, PDF를 Markdown으로 변환하고 검색
 
 ## 설치
 
+3.3.4에서는 PowerShell 설치 완료 안내, Claude Code 자동 탐색, 앱 재시작 후 에이전트 선택과 연결 테스트 이력 복원을 개선했습니다. 같은 청크를 여러 번 인용해도 출처 목록에서 한 번만 표시되며, 파일·폴더를 추가할 때 문서 역할을 직접 입력해 검색할 수 있습니다.
+
 Windows x64에서 **PowerShell**을 열고 아래 명령을 실행하세요. 최신 정식 설치 파일의 SHA-256을 확인한 뒤 설치 마법사가 열립니다. 설치 완료 알림을 확인하고 시작 메뉴에서 **OfficeMarkdown**을 실행하세요. Java와 Office는 별도로 설치할 필요가 없습니다.
 
 ```powershell
