@@ -132,6 +132,57 @@ class SearchIndexTest {
         return SearchIndex.search(root,query,scope,mode,100).stream().map(Library.Hit::title)
                 .collect(java.util.stream.Collectors.toSet());
     }
+
+    @Test void mixedLengthPreviewUsesTheOriginalPhraseAndScope() throws Exception {
+        Path literal = root.resolve("literal.md"), partial = root.resolve("partial.md");
+        Files.writeString(literal, "# 기록\n\n[원본 파일 열기](<" + root.resolve("literal.docx").toUri()
+                + ">)\n\n## 구성\nAD 어댑터 설치법");
+        Files.writeString(partial, "# AD 어댑터 문서\n\n[원본 파일 열기](<" + root.resolve("partial.docx").toUri()
+                + ">)\n\n## 구성\n어댑터 등록");
+        SearchIndex.indexCompleted(root, java.util.List.of(literal, partial));
+        var content = SearchIndex.Scope.CONTENT;
+        var relevance = SearchIndex.Mode.RELEVANCE;
+        var preview = SearchIndex.searchPhrasePreview(root, "ad 어댑터", content, relevance, 10);
+        assertEquals(SearchIndex.searchCached(root, "ad 어댑터", content, SearchIndex.Mode.PHRASE, 10), preview);
+        assertEquals(java.util.List.of(literal), preview.stream().map(Library.Hit::md).toList());
+        var titlePreview = SearchIndex.searchPhrasePreview(root, "ad 어댑터", SearchIndex.Scope.TITLE, relevance, 10);
+        assertEquals(java.util.List.of(partial), titlePreview.stream().map(Library.Hit::md).toList());
+        assertTrue(SearchIndex.searchPhrasePreview(root, "ad  어댑터", content, relevance, 10).isEmpty());
+        assertTrue(SearchIndex.searchPhrasePreview(root, "어댑터 설치법", content, relevance, 10).isEmpty());
+        assertTrue(SearchIndex.searchPhrasePreview(root, "ad 어댑터", content, SearchIndex.Mode.OR, 10).isEmpty());
+        var ranked = SearchIndex.searchCached(root, "ad 어댑터", content, relevance, 10);
+        assertEquals(java.util.List.of(literal, partial), ranked.stream().map(Library.Hit::md).toList());
+    }
+
+    @Test void interruptedReaderStopsSqliteDuringQueryExecution() throws Exception {
+        Path note = root.resolve("record.md");
+        Files.writeString(note, "# record\n\n[원본 파일 열기](<" + root.resolve("record.docx").toUri()
+                + ">)\n\n## section\ncontent");
+        SearchIndex.indexCompleted(root, java.util.List.of(note));
+        try {
+            var interrupted = assertThrows(java.io.IOException.class, () -> SearchIndex.readIndex(db -> {
+                org.sqlite.Function.create(db, "interrupt_search", new org.sqlite.Function() {
+                    @Override protected void xFunc() throws java.sql.SQLException {
+                        int row = value_int(0);
+                        if (row == 1_000) Thread.currentThread().interrupt();
+                        if (row == 50_000) throw new java.sql.SQLException("SQLite did not stop after interruption");
+                        result(row);
+                    }
+                });
+                try (var sql = db.createStatement(); var rows = sql.executeQuery("""
+                        WITH RECURSIVE sequence(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM sequence WHERE n<50000)
+                        SELECT sum(interrupt_search(n)) FROM sequence
+                        """)) {
+                    return rows.next() ? java.util.List.of(rows.getLong(1)) : java.util.List.of();
+                }
+            }));
+            var cause = assertInstanceOf(org.sqlite.SQLiteException.class, interrupted.getCause());
+            assertEquals(org.sqlite.SQLiteErrorCode.SQLITE_INTERRUPT, cause.getResultCode());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
     @Test void existingNotesEditsAndRemovalAreVisibleAcrossConnections() throws Exception {
         Path md = root.resolve("기록.md"), source = root.resolve("sample.xlsx");
         String note = "# 연말 회의록\n\n[원본 파일 열기](<" + source.toUri().toASCIIString()

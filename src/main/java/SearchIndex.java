@@ -6,6 +6,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import org.sqlite.ProgressHandler;
 import org.sqlite.SQLiteConfig;
 import org.sqlite.SQLiteErrorCode;
 
@@ -67,11 +68,18 @@ final class SearchIndex {
         return searchCached(root, query, scope, mode, limit);
     }
 
+    static List<Library.Hit> searchPhrasePreview(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
+        if (mode != Mode.RELEVANCE || scope == Scope.IMAGE || slideSearchRequested(query, scope, mode))
+            return List.of();
+        var words = RelevanceSearch.words(query);
+        long shortWords = words.stream().filter(word -> word.codePointCount(0, word.length()) < 3).count();
+        if (shortWords == 0 || shortWords == words.size()) return List.of();
+        return searchCached(root, query, scope, Mode.PHRASE, limit);
+    }
+
     static List<Library.Hit> searchCached(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
         if (limit < 1) throw new IllegalArgumentException("검색 한도는 1 이상이어야 합니다.");
-        boolean slideRequest = mode == Mode.RELEVANCE && scope == Scope.ALL
-                && Boolean.getBoolean(SlideSearch.ENABLED) && SlideSearch.requested(query);
-        if (slideRequest) {
+        if (slideSearchRequested(query, scope, mode)) {
             var result = preparedSlideSearch(query, limit);
             if (result.isPresent()) return result.get();
         }
@@ -87,6 +95,11 @@ final class SearchIndex {
             if (words.size() <= 1) return find(db, words.isEmpty() ? "" : words.getFirst(), scope, limit);
             return findWords(db, words, scope, mode, limit);
         });
+    }
+
+    private static boolean slideSearchRequested(String query, Scope scope, Mode mode) {
+        return mode == Mode.RELEVANCE && scope == Scope.ALL
+                && Boolean.getBoolean(SlideSearch.ENABLED) && SlideSearch.requested(query);
     }
 
     static List<Library.Hit> libraryCards(Path root, int limit) throws IOException {
@@ -143,6 +156,14 @@ final class SearchIndex {
         return DriverManager.getConnection("jdbc:sqlite:" + database, config.toProperties());
     }
 
+    private static void interruptibleReader(Connection db) throws SQLException {
+        ProgressHandler.setHandler(db, 10_000, new ProgressHandler() {
+            @Override protected int progress() {
+                return Thread.currentThread().isInterrupted() ? 1 : 0;
+            }
+        });
+    }
+
     static String visibilityPredicate(boolean hasQueue) {
         return hasQueue ? " WHERE NOT EXISTS (SELECT 1 FROM large_pending p WHERE p.md=d.md)" : "";
     }
@@ -151,6 +172,7 @@ final class SearchIndex {
         Path path = database();
         if (!Files.isRegularFile(path)) return Optional.of(List.of());
         try (var db = openReader(path); var sql = db.createStatement()) {
+            interruptibleReader(db);
             db.setAutoCommit(false);
             try (var tables = sql.executeQuery("""
                     SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='slide_pages'),
@@ -174,6 +196,7 @@ final class SearchIndex {
         if (!Files.isRegularFile(database)) return List.of();
         try (Connection db = openReader(database);
              Statement sql = db.createStatement()) {
+            interruptibleReader(db);
             // Opening can race with creation of a brand-new index. Its schema is published in one transaction.
             try (var tables = sql.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='docs'")) {
                 if (!tables.next()) return List.of();

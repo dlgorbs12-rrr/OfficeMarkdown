@@ -88,7 +88,7 @@ public final class OfficeMarkdown {
     private SwingWorker<String,Void> rendering;
     private SwingWorker<Icon,Void> loadingPicture;
     private SwingWorker<Void,Thumbnail> loadingThumbnails;
-    private SwingWorker<List<Library.Hit>,Void> searchWorker;
+    private SwingWorker<List<Library.Hit>,List<Library.Hit>> searchWorker;
     private SwingWorker<Void,SearchIndex.Progress> indexWorker;
     private final Map<Library.Hit,Icon> thumbnails = new HashMap<>();
     private final Map<Library.Hit,Icon> covers = new HashMap<>();
@@ -107,6 +107,7 @@ public final class OfficeMarkdown {
     private boolean startupSyncStarted;
     private SearchRequest lastSearch;
     private SearchRequest displayedSearch;
+    private boolean showingSearchPreview;
     private String lastSearchSummary = "";
     /** Footer text of the last search, restored when leaving the agent screen. */
     private String searchStatus = "";
@@ -214,6 +215,7 @@ public final class OfficeMarkdown {
             recentQueries.setVisible(false);
             lastSearch = null;
             displayedSearch = null;
+            showingSearchPreview = false;
             status.setText("답변 근거");
             setResultView(hit.picture()==null ? ResultView.DOCUMENT : ResultView.PICTURE);
             model.clear(); activeWords=List.of(hit.excerpt()); model.addElement(hit);
@@ -1150,16 +1152,40 @@ public final class OfficeMarkdown {
     private void searchCached(SearchRequest request, String summary) {
         invalidateResultScope();
         cancelSearch();
+        boolean newRequest = !request.equals(displayedSearch);
+        if (showingSearchPreview && newRequest) {
+            showingSearchPreview = false;
+            displayedSearch = null;
+            count.setText("검색 중…");
+            emptyTitle.setText("색인된 문서를 검색하는 중…");
+            emptyHint.setText("");
+            emptyButton.setVisible(false);
+            showHits(List.of(), List.of());
+        }
         lastSearch = request;
         lastSearchSummary = summary;
         status.setToolTipText(null);
-        status.setText(request.brokenOcr() ? "OCR 깨짐 의심 목록을 찾는 중…" : "색인된 문서를 검색하는 중…");
+        searchStatus = request.brokenOcr() ? "OCR 깨짐 의심 목록을 찾는 중…" : "색인된 문서를 검색하는 중…";
+        status.setText(searchStatus);
         searchWorker = new SwingWorker<>() {
             protected List<Library.Hit> doInBackground() throws Exception {
-                if (!request.brokenOcr() && request.scope()!=SearchIndex.Scope.IMAGE && request.needle().isBlank())
+                if (request.brokenOcr()) return SearchIndex.suspectedOcrCached(library, LIMIT + 1);
+                if (request.scope()!=SearchIndex.Scope.IMAGE && request.needle().isBlank())
                     return SearchIndex.libraryCards(library,LIMIT);
-                return request.brokenOcr() ? SearchIndex.suspectedOcrCached(library, LIMIT + 1)
-                        : SearchIndex.searchCached(library, request.needle(), request.scope(), request.mode(), LIMIT);
+                if (newRequest) {
+                    try {
+                        var preview = SearchIndex.searchPhrasePreview(library, request.needle(), request.scope(), request.mode(), LIMIT);
+                        if (!preview.isEmpty()) publish(preview);
+                    } catch (IOException ignored) {
+                        // A temporary preview failure should not prevent the requested search.
+                    }
+                }
+                if (isCancelled()) return List.of();
+                return SearchIndex.searchCached(library, request.needle(), request.scope(), request.mode(), LIMIT);
+            }
+
+            @Override protected void process(List<List<Library.Hit>> previews) {
+                if (searchWorker == this && !isDone()) displaySearch(request, previews.getLast(), summary, true);
             }
 
             protected void done() {
@@ -1167,23 +1193,42 @@ public final class OfficeMarkdown {
                     if (searchWorker != this) return;
                     searchWorker = null;
                     var hits = get();
-                    displaySearch(request, hits, summary);
+                    displaySearch(request, hits, summary, false);
                 } catch (Exception e) {
-                    status.setText("색인에서 검색하지 못했습니다.");
+                    searchStatus = showingSearchPreview ? "관련도 검색을 완료하지 못했습니다." : "색인에서 검색하지 못했습니다.";
+                    if (displayedSearch == null && model.isEmpty()) {
+                        count.setText("검색 결과");
+                        emptyTitle.setText(searchStatus);
+                        emptyHint.setText("다시 검색하거나 전체 문서 목록을 확인하세요.");
+                        emptyButton.setText("전체 문서 보기");
+                        emptyButton.setVisible(true);
+                        showImport = false;
+                        pages.show(contents, "empty");
+                    }
+                    status.setText(searchStatus);
                     status.setToolTipText(e.getCause() == null ? e.toString() : e.getCause().toString());
                 } finally {
-                    if (!startupSyncStarted) startIndexSync();
+                    if (!startupSyncStarted && searchWorker == null) startIndexSync();
                 }
             }
         };
         searchWorker.execute();
     }
 
-    private void displaySearch(SearchRequest request, List<Library.Hit> hits, String summary) {
-        var previous = request.equals(displayedSearch) ? results.getSelectedValuesList() : List.<Library.Hit>of();
-        if (!request.equals(displayedSearch)) readingCard = false;
+    private void displaySearch(SearchRequest request, List<Library.Hit> hits, String summary, boolean preview) {
+        boolean sameRequest = request.equals(displayedSearch);
+        var previous = sameRequest ? results.getSelectedValuesList() : List.<Library.Hit>of();
+        if (sameRequest && showingSearchPreview && !preview && !previous.isEmpty()) {
+            var selected = previous.getFirst();
+            previous = hits.stream()
+                    .filter(hit -> hit.md().equals(selected.md()) && Objects.equals(hit.section(), selected.section()))
+                    .limit(1).toList();
+        }
+        if (!sameRequest) readingCard = false;
         displayedSearch = request;
-        if (!request.brokenOcr() && request.scope()!=SearchIndex.Scope.IMAGE && !request.needle().isBlank()
+        showingSearchPreview = preview;
+        emptyButton.setVisible(true);
+        if (!preview && !request.brokenOcr() && request.scope()!=SearchIndex.Scope.IMAGE && !request.needle().isBlank()
                 && request.needle().equals(query.getText()) && request.scope()==scope.getSelectedItem()) {
             resultNotes=hits.stream()
                     .map(hit -> hit.md().toAbsolutePath().normalize().toString()).distinct().toList();
@@ -1211,7 +1256,7 @@ public final class OfficeMarkdown {
         boolean all = request.needle().isBlank();
         setResultView(pictures ? ResultView.PICTURE : ResultView.DOCUMENT);
         activeWords = request.mode().words(request.needle());
-        count.setText((pictures ? "그림 결과" : all ? "문서 목록" : "검색 결과") + "   "
+        count.setText((preview ? "문구 일치 임시 결과" : pictures ? "그림 결과" : all ? "문서 목록" : "검색 결과") + "   "
                 + hits.size() + (hits.size() == LIMIT ? "+" : ""));
         showImport = !pictures && all && hits.isEmpty();
         boolean indexing = !startupSyncStarted || indexWorker != null;
@@ -1222,7 +1267,8 @@ public final class OfficeMarkdown {
                 : "검색어를 줄이거나 전체 문서 목록을 확인하세요.");
         emptyButton.setText(showImport ? "파일 선택" : "전체 문서 보기");
         showHits(hits, previous);
-        searchStatus = summary + (hits.isEmpty() || galleryRequest() && !readingCard ? "Ctrl+F 검색창으로 이동"
+        searchStatus = summary + (preview ? "관련도 검색 중… 완료되면 전체 결과를 표시합니다."
+                : hits.isEmpty() || galleryRequest() && !readingCard ? "Ctrl+F 검색창으로 이동"
                 : "Ctrl+F 검색창으로 이동 · 결과를 두 번 누르면 Markdown 뷰어로 엽니다");
         status.setText(agentMode.isSelected() ? "Enter 보내기 · Shift+Enter 줄바꿈" : searchStatus);
     }
