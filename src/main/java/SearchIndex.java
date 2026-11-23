@@ -6,6 +6,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import org.sqlite.Function;
 import org.sqlite.ProgressHandler;
 import org.sqlite.SQLiteConfig;
 import org.sqlite.SQLiteErrorCode;
@@ -14,10 +15,15 @@ final class SearchIndex {
     static final String DATABASE = ".office-index-v1.sqlite";
     private static final int INDEX_BATCH = 64;
     private static final int WRITER_WAIT_MS = 60_000;
+    static final String AUTOMATIC_ROLE = "자동 분류";
+    static final String UNCLASSIFIED_ROLE = "미분류";
+    private static final String CUSTOM_ROLE_PREFIX = "custom:";
+    private static final String ROLE_LABEL_SQL = roleLabelSql();
 
     static final long LARGE_BYTES = 100_000_000L;
     record Progress(long checked, long updated, long removed, long deferred) {}
     record Completion(int indexed, int deferred) {}
+    record DocumentRole(String label, String selection) {}
     record HeldNote(Path path, long size) {
         @Override public String toString() {
             return "%s  (%.1f MB)".formatted(path.getFileName(), size / 1_000_000.0);
@@ -38,7 +44,7 @@ final class SearchIndex {
         }
     }
     enum Scope {
-        ALL("전체"), TITLE("제목"), CONTENT("내용"), IMAGE("그림 OCR");
+        ALL("전체"), TITLE("제목"), CONTENT("내용"), IMAGE("그림 OCR"), ROLE("문서 역할");
         private final String label;
         Scope(String label) { this.label = label; }
         public String toString() { return label; }
@@ -69,7 +75,7 @@ final class SearchIndex {
     }
 
     static List<Library.Hit> searchPhrasePreview(Path root, String query, Scope scope, Mode mode, int limit) throws IOException {
-        if (mode != Mode.RELEVANCE || scope == Scope.IMAGE || slideSearchRequested(query, scope, mode))
+        if (mode != Mode.RELEVANCE || scope == Scope.IMAGE || scope == Scope.ROLE || slideSearchRequested(query, scope, mode))
             return List.of();
         var words = RelevanceSearch.words(query);
         long shortWords = words.stream().filter(word -> word.codePointCount(0, word.length()) < 3).count();
@@ -84,6 +90,7 @@ final class SearchIndex {
             if (result.isPresent()) return result.get();
         }
         return readIndex(db -> {
+            if (scope == Scope.ROLE) return findRoles(db, query.strip(), limit);
             if(mode==Mode.RELEVANCE && !query.isBlank()){
                 if (scope==Scope.IMAGE) return RelevanceSearch.pictures(db,query,limit,null);
                 // The per-source lookup uses several statements on this dedicated read connection.
@@ -162,6 +169,16 @@ final class SearchIndex {
                 return Thread.currentThread().isInterrupted() ? 1 : 0;
             }
         });
+    }
+
+    static void registerUnicodeLower(Connection db) throws SQLException {
+        // SQLite lower() only folds ASCII. Match the normalization used for indexed text.
+        Function.create(db, "office_lower", new Function() {
+            @Override protected void xFunc() throws SQLException {
+                String value = value_text(0);
+                result(value == null ? null : value.toLowerCase(Locale.ROOT));
+            }
+        }, 1, Function.FLAG_DETERMINISTIC);
     }
 
     static String visibilityPredicate(boolean hasQueue) {
@@ -342,8 +359,13 @@ final class SearchIndex {
     }
 
     static Completion indexCompletedDetailed(Path root, List<Path> markdown) throws IOException {
+        return indexCompletedDetailed(root, markdown, AUTOMATIC_ROLE);
+    }
+
+    static Completion indexCompletedDetailed(Path root, List<Path> markdown, String roleSelection) throws IOException {
         if (markdown.isEmpty()) return new Completion(0, 0);
         Path library = root.toAbsolutePath().normalize();
+        String manualRole = manualRoleCode(roleSelection);
         checkInterrupted();
         try (var writer = new IndexWriter(library)) {
             int indexed = 0, deferred = 0;
@@ -356,7 +378,7 @@ final class SearchIndex {
                         throw new IOException("검색 색인 대상이 Markdown 폴더 안의 문서가 아닙니다.");
                     paths.add(library.resolve(note.getFileName()));
                 }
-                var result = writer.write(paths, false);
+                var result = writer.write(paths, false, manualRole);
                 indexed += result.indexed();
                 deferred += result.deferred();
             }
@@ -587,6 +609,10 @@ final class SearchIndex {
         }
 
         BatchResult write(List<Path> notes, boolean removeOnly) throws SQLException, IOException {
+            return write(notes, removeOnly, null);
+        }
+
+        BatchResult write(List<Path> notes, boolean removeOnly, String manualRole) throws SQLException, IOException {
             checkInterrupted();
             int indexed = 0, updated = 0, removed = 0, deferred = 0;
             sql.execute("BEGIN IMMEDIATE");
@@ -596,6 +622,8 @@ final class SearchIndex {
                 for (Path note : notes) {
                     checkInterrupted();
                     Outcome outcome = removeOnly ? removeMissing(note) : index(note, hold, reference);
+                    if (manualRole != null && (outcome == Outcome.UNCHANGED || outcome == Outcome.UPDATED || outcome == Outcome.DEFERRED))
+                        setManualRole(note, manualRole);
                     if (outcome == Outcome.UNCHANGED || outcome == Outcome.UPDATED) indexed++;
                     if (outcome == Outcome.UPDATED) updated++;
                     if (outcome == Outcome.DEFERRED) deferred++;
@@ -608,6 +636,18 @@ final class SearchIndex {
             } catch (SQLException | IOException | RuntimeException e) {
                 try { sql.execute("ROLLBACK"); } catch (SQLException rollback) { e.addSuppressed(rollback); }
                 throw e;
+            }
+        }
+
+        void setManualRole(Path note, String role) throws SQLException, IOException {
+            try (var q = db.prepareStatement("""
+                    INSERT INTO document_roles(md,inferred,manual)
+                    SELECT ?1,'',?2 WHERE EXISTS(SELECT 1 FROM docs WHERE md=?1 UNION ALL SELECT 1 FROM large_pending WHERE md=?1)
+                    ON CONFLICT(md) DO UPDATE SET manual=excluded.manual
+                    """)) {
+                q.setString(1, note.toString());
+                q.setString(2, role);
+                if (q.executeUpdate() != 1) throw new IOException("색인에서 문서를 찾지 못했습니다.");
             }
         }
 
@@ -864,28 +904,52 @@ final class SearchIndex {
         });
     }
 
-    static String documentRole(Path md)throws IOException{
-        var values=readIndex(db->{
-            try(var q=db.prepareStatement("SELECT role FROM visible_docs WHERE md=?")){
-                q.setString(1,md.toString());
-                try(var r=q.executeQuery()){return r.next()?List.of(r.getString(1)):List.<String>of();}
-            }
-        });
-        if(values.isEmpty() || values.getFirst().isBlank() || values.getFirst().equals("UNKNOWN"))return "미분류";
-        return PmReference.Kind.valueOf(values.getFirst()).label;
+    static String documentRole(Path md) throws IOException {
+        return documentRoleSetting(md).label();
     }
 
-    static void setDocumentRole(Path md,String selection)throws IOException{
-        String role=null;
-        if(!selection.equals("자동 분류")){
-            role=Arrays.stream(PmReference.Kind.values()).filter(k->k.label.equals(selection))
-                    .map(Enum::name).findFirst().orElse("UNKNOWN");
+    static DocumentRole documentRoleSetting(Path md) throws IOException {
+        var values = readIndex(db -> {
+            try (var q = db.prepareStatement("SELECT " + ROLE_LABEL_SQL + ",manual_role IS NOT NULL FROM visible_docs WHERE md=?")) {
+                q.setString(1, md.toString());
+                try (var r = q.executeQuery()) {
+                    if (!r.next()) return List.<DocumentRole>of();
+                    String label = r.getString(1);
+                    return List.of(new DocumentRole(label, r.getBoolean(2) ? label : AUTOMATIC_ROLE));
+                }
+            }
+        });
+        return values.isEmpty() ? new DocumentRole(UNCLASSIFIED_ROLE, AUTOMATIC_ROLE) : values.getFirst();
+    }
+
+    static void setDocumentRole(Path md, String selection) throws IOException {
+        Path note = md.toAbsolutePath().normalize();
+        try (var writer = new IndexWriter(note.getParent())) {
+            writer.setManualRole(note, manualRoleCode(selection));
+        } catch (SQLException e) {
+            throw new IOException(e);
         }
-        try(var writer=new IndexWriter(md.getParent());
-            var q=writer.db.prepareStatement("INSERT INTO document_roles(md,inferred,manual) SELECT md,'',? FROM docs WHERE md=? ON CONFLICT(md) DO UPDATE SET manual=excluded.manual")){
-            q.setString(1,role);q.setString(2,md.toString());
-            if(q.executeUpdate()!=1)throw new IOException("색인에서 문서를 찾지 못했습니다.");
-        }catch(SQLException e){throw new IOException(e);}
+    }
+
+    private static String manualRoleCode(String selection) {
+        String label = selection.strip();
+        if (label.isEmpty() || label.equals(AUTOMATIC_ROLE)) return null;
+        if (label.equals(UNCLASSIFIED_ROLE)) return "UNKNOWN";
+        for (var kind : PmReference.Kind.values()) {
+            if (kind.label.equalsIgnoreCase(label)) return kind.name();
+        }
+        // Keep user labels distinct from the codes already stored by earlier versions.
+        return CUSTOM_ROLE_PREFIX + label;
+    }
+
+    private static String roleLabelSql() {
+        var sql = new StringBuilder("CASE role WHEN '' THEN '").append(UNCLASSIFIED_ROLE)
+                .append("' WHEN 'UNKNOWN' THEN '").append(UNCLASSIFIED_ROLE).append("'");
+        for (var kind : PmReference.Kind.values()) {
+            sql.append(" WHEN '").append(kind.name()).append("' THEN '").append(kind.label.replace("'", "''")).append("'");
+        }
+        return sql.append(" ELSE CASE WHEN role GLOB '").append(CUSTOM_ROLE_PREFIX).append("*' THEN substr(role,")
+                .append(CUSTOM_ROLE_PREFIX.length() + 1).append(") ELSE role END END").toString();
     }
 
     static List<DocumentAgent.Claim> pmReferences(Path root,PmReference plan,Focus focus)throws IOException {
@@ -1029,7 +1093,7 @@ final class SearchIndex {
             case ALL -> -1;
             case TITLE -> 0;
             case CONTENT -> 2;
-            case IMAGE -> throw new IllegalArgumentException("그림 검색 범위");
+            case IMAGE, ROLE -> throw new IllegalArgumentException("문서 제목·내용 검색 범위가 아닙니다.");
         };
         try (var stmt = db.prepareStatement(sql)) {
             String json = new com.google.gson.Gson().toJson(words);
@@ -1056,7 +1120,7 @@ final class SearchIndex {
             case TITLE -> "kind=0";
             case CONTENT -> "kind=2";
             case ALL -> "(kind<>1 OR instr(lower(d.title),?)=0)";
-            case IMAGE -> throw new IllegalArgumentException("그림 검색 범위");
+            case IMAGE, ROLE -> throw new IllegalArgumentException("문서 제목·내용 검색 범위가 아닙니다.");
         };
         String sql = """
                 SELECT md,source,title,section,text FROM (
@@ -1070,6 +1134,17 @@ final class SearchIndex {
             if (scope == Scope.ALL) stmt.setString(i++,needle);
             if (indexed) stmt.setString(i++,"\"" + needle.replace("\"","\"\"") + "\"");
             stmt.setString(i++,needle); stmt.setInt(i,limit);
+            return results(stmt);
+        }
+    }
+
+    private static List<Library.Hit> findRoles(Connection db, String query, int limit) throws SQLException {
+        registerUnicodeLower(db);
+        String sql = "SELECT md,source,title,'문서 역할',label FROM (SELECT md,source,title," + ROLE_LABEL_SQL
+                + " AS label FROM visible_docs) WHERE instr(office_lower(label),?)>0 ORDER BY title,md LIMIT ?";
+        try (var stmt = db.prepareStatement(sql)) {
+            stmt.setString(1, query.toLowerCase(Locale.ROOT));
+            stmt.setInt(2, limit);
             return results(stmt);
         }
     }

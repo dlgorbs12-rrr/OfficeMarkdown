@@ -1,4 +1,5 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
+param([switch]$NoCompletionDialog)
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $repository = 'dlgorbs12-rrr/OfficeMarkdown'
@@ -29,4 +30,19 @@ try {
         [IO.File]::Delete((Join-Path $directory.FullName $name))
     }
     [IO.Directory]::Delete($directory.FullName)
+}
+
+$message = 'OfficeMarkdown 설치가 완료되었습니다. 시작 메뉴에서 OfficeMarkdown을 실행하세요.'
+if ($process.ExitCode -eq 3010) {
+    $message = 'OfficeMarkdown 설치가 완료되었습니다. Windows를 다시 시작한 후 시작 메뉴에서 OfficeMarkdown을 실행하세요.'
+}
+Write-Host $message
+if (-not $NoCompletionDialog -and [Environment]::UserInteractive -and
+    [Environment]::GetCommandLineArgs() -notcontains '-NonInteractive') {
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        [void]$shell.Popup($message, 30, 'OfficeMarkdown', 64)
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
 }

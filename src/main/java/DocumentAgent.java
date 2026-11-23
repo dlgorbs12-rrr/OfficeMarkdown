@@ -3,10 +3,20 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 final class DocumentAgent {
+    private static final List<String> REDIRECT_FILES=List.of("request","reply","diagnostic");
+    private static final long[] CLEANUP_DELAYS_MILLIS={100,500,2000,10000,30000,120000};
+    private static final Semaphore CLEANUP_SLOTS=new Semaphore(64);
+    private static final ScheduledExecutorService CLEANUP=Executors.newSingleThreadScheduledExecutor(
+            Thread.ofPlatform().daemon().name("office-agent-cleanup").factory());
+
     enum Provider {
         CODEX("Codex","codex"), CLAUDE("Claude Code","claude"), COPILOT("GitHub Copilot","copilot");
         final String label,exe;
@@ -15,20 +25,45 @@ final class DocumentAgent {
         Path executable() throws IOException {
             String override=AgentConnection.override(this);
             if(!override.isEmpty()){
-                Path path=Path.of(override);
-                if(Files.isRegularFile(path) && path.getFileName().toString().equalsIgnoreCase(exe+".exe"))return path;
+                try{
+                    Path path=Path.of(override);
+                    if(path.isAbsolute() && Files.isRegularFile(path) && path.getFileName().toString().equalsIgnoreCase(exe+".exe"))return path;
+                }catch(InvalidPathException ignored){}
                 throw new IOException("지정한 실행 파일을 찾을 수 없습니다. 에이전트 설정에서 경로를 확인하세요.");
             }
-            List<String> folders=new ArrayList<>(Arrays.asList(Objects.toString(System.getenv("PATH"),"").split(File.pathSeparator)));
-            folders.add(Path.of(System.getProperty("user.home"),".local","bin").toString());
-            folders.add(Path.of(System.getenv("LOCALAPPDATA"),"Microsoft","WinGet","Links").toString());
-            if(this==CODEX) folders.add(Path.of(System.getenv("LOCALAPPDATA"),"Programs","OpenAI","Codex","bin").toString());
-            for(String folder:folders){
-                if(folder.isBlank()) continue;
-                Path p=Path.of(folder.replace("\"",""),exe+".exe");
-                if(p.isAbsolute() && Files.isRegularFile(p)) return p;
+            return discoverExecutable(System::getenv,System.getProperty("user.home"));
+        }
+        Path discoverExecutable(Function<String,String> env,String userHome) throws IOException {
+            var pathDirectories=new LinkedHashSet<Path>();
+            for(String entry:Objects.toString(env.apply("PATH"),"").split(File.pathSeparator))
+                addDirectory(pathDirectories,entry);
+            var directories=new LinkedHashSet<>(pathDirectories);
+            addDirectory(directories,env.apply("USERPROFILE"),".local","bin");
+            addDirectory(directories,userHome,".local","bin");
+            addDirectory(directories,env.apply("LOCALAPPDATA"),"Microsoft","WinGet","Links");
+            addDirectory(directories,env.apply("ProgramW6432"),"WinGet","Links");
+            addDirectory(directories,env.apply("ProgramFiles"),"WinGet","Links");
+            if(this==CODEX)addDirectory(directories,env.apply("LOCALAPPDATA"),"Programs","OpenAI","Codex","bin");
+            if(this==CLAUDE){
+                addDirectory(pathDirectories,env.apply("NPM_CONFIG_PREFIX"));
+                addDirectory(pathDirectories,env.apply("APPDATA"),"npm");
+                for(Path prefix:pathDirectories)
+                    directories.add(prefix.resolve(Path.of("node_modules","@anthropic-ai","claude-code","bin")));
+            }
+            for(Path directory:directories){
+                Path candidate=directory.resolve(exe+".exe");
+                if(Files.isRegularFile(candidate))return candidate;
             }
             throw new IOException(label+" CLI를 찾을 수 없습니다. "+exe+".exe를 설치하고 로그인한 뒤 앱을 다시 여세요.");
+        }
+        private static void addDirectory(Set<Path> directories,String root,String... suffix){
+            if(root==null || root.isBlank())return;
+            String path=root.strip();
+            if(path.startsWith("\"") && path.endsWith("\"") && path.length()>1)path=path.substring(1,path.length()-1);
+            try{
+                Path directory=Path.of(path,suffix);
+                if(directory.isAbsolute())directories.add(directory.normalize());
+            }catch(InvalidPathException ignored){/* Other PATH entries remain usable. */}
         }
     }
     record Claim(String answer,Library.Hit proof,List<SearchIndex.Evidence> evidence,List<String> missing,String referenceUse,ReferenceIndex.Page page) {
@@ -93,17 +128,23 @@ final class DocumentAgent {
         cmd.addAll(effort.arguments(provider));
         if(provider==Provider.CODEX)cmd.add("-");
         if(provider==Provider.COPILOT)cmd.addAll(List.of("-p",prompt));
-        Path temp=Files.createTempDirectory("office-question-");
+        var command=new ProcessBuilder(cmd).directory(Files.createTempDirectory("office-question-").toFile());
+        return runCommand(command,provider,effort,provider==Provider.COPILOT?"":prompt,progress,TimeUnit.SECONDS.toNanos(150));
+    }
+
+    static String runCommand(ProcessBuilder command,Provider provider,Effort effort,String prompt,Progress progress,long timeoutNanos)
+            throws IOException,InterruptedException {
+        Path temp=command.directory().toPath();
         Path out=temp.resolve("reply"), err=temp.resolve("diagnostic");
         Path input=temp.resolve("request");
         Process proc=null;
         try {
-            Files.writeString(input,provider==Provider.COPILOT?"":prompt,StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW);
-            proc=new ProcessBuilder(cmd).directory(temp.toFile()).redirectInput(input.toFile()).redirectOutput(out.toFile()).redirectError(err.toFile()).start();
-            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(150);
+            Files.writeString(input,prompt,StandardCharsets.UTF_8,StandardOpenOption.CREATE_NEW);
+            proc=command.redirectInput(input.toFile()).redirectOutput(out.toFile()).redirectError(err.toFile()).start();
+            long deadline=System.nanoTime()+timeoutNanos;
             while(!proc.waitFor(300,TimeUnit.MILLISECONDS)){
                 progress.poll();
-                if(System.nanoTime()>=deadline)throw new IOException(provider+" 응답 시간 초과");
+                if(System.nanoTime()-deadline>=0)throw new IOException(provider+" 응답 시간 초과");
             }
             progress.poll();
             if(proc.exitValue()!=0) {
@@ -113,14 +154,43 @@ final class DocumentAgent {
             }
             return Files.readString(out).strip();
         } finally {
-            if(proc!=null && proc.isAlive()){
-                proc.descendants().forEach(ProcessHandle::destroyForcibly);
-                proc.destroyForcibly().onExit().join();
+            try{
+                if(proc!=null && proc.isAlive()){
+                    proc.descendants().forEach(ProcessHandle::destroyForcibly);
+                    proc.destroyForcibly().onExit().join();
+                }
+            }finally{
+                // Windows descendants may retain the redirected handles after the CLI returns.
+                if(!deleteRunFiles(temp) && CLEANUP_SLOTS.tryAcquire())retryCleanup(temp,0);
             }
-            Files.deleteIfExists(input); Files.deleteIfExists(out); Files.deleteIfExists(err);
-            // A CLI may leave its own session metadata in this task-specific directory.
-            try { Files.delete(temp); } catch(DirectoryNotEmptyException ignored) {}
         }
+    }
+
+    private static boolean deleteRunFiles(Path temp){
+        boolean deleted=true;
+        for(String file:REDIRECT_FILES){
+            if(!deleteQuietly(temp.resolve(file)))deleted=false;
+        }
+        return deleteQuietly(temp) && deleted;
+    }
+
+    private static boolean deleteQuietly(Path path){
+        try{
+            Files.deleteIfExists(path);
+            return true;
+        }catch(DirectoryNotEmptyException ignored){
+            // Preserve other files created by the CLI.
+            return true;
+        }catch(IOException | SecurityException ignored){
+            return false;
+        }
+    }
+
+    private static void retryCleanup(Path temp,int attempt){
+        CLEANUP.schedule(()->{
+            if(deleteRunFiles(temp) || attempt+1==CLEANUP_DELAYS_MILLIS.length)CLEANUP_SLOTS.release();
+            else retryCleanup(temp,attempt+1);
+        },CLEANUP_DELAYS_MILLIS[attempt],TimeUnit.MILLISECONDS);
     }
 
     static JsonArray array(String reply) throws IOException {

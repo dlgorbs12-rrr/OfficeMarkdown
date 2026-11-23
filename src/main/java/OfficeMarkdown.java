@@ -32,6 +32,7 @@ public final class OfficeMarkdown {
     private final ReferencePanel referencePanel = new ReferencePanel(hit -> open(hit, false, false));
     private final JComboBox<SearchIndex.Scope> scope = new JComboBox<>(SearchIndex.Scope.values());
     private final JComboBox<SearchIndex.Mode> mode = new JComboBox<>(SearchIndex.Mode.values());
+    private final JComboBox<String> importRole = roleSelector(SearchIndex.AUTOMATIC_ROLE);
     private final JButton search = new JButton("검색"), add = new JButton("파일 추가"), folder = new JButton("폴더 추가");
     private final JButton enrichPictures=new JButton("그림 검색 색인 보강");
     private final JButton findBrokenOcr = new JButton("OCR 깨짐 점검");
@@ -42,6 +43,7 @@ public final class OfficeMarkdown {
     private List<Path> remainingNotes=List.of();
     private List<Library.Hit> remainingPictures=List.of();
     private final JButton roleButton = new JButton("문서 역할");
+    private SearchIndex.DocumentRole selectedDocumentRole;
     private final JButton repairOcr = new JButton("선택 그림 재인식");
     private final JButton largeOptions = new JButton("대용량 색인 관리");
     private final JButton ocrOnly = new JButton("OCR만 실행");
@@ -341,6 +343,12 @@ public final class OfficeMarkdown {
 
         importOptions.add(imageOptions);
         importOptions.add(batchOptions);
+        JPanel roleOptions = LibraryStyle.panel(new FlowLayout(FlowLayout.RIGHT,6,0),0);
+        JLabel roleLabel = new JLabel("변환 문서 공통 역할");
+        roleLabel.setLabelFor(importRole);
+        roleOptions.add(roleLabel);
+        roleOptions.add(importRole);
+        importOptions.add(roleOptions);
         searchBox.add(hero, BorderLayout.NORTH);
         JPanel bar = new SearchStudio.Round(new BorderLayout(8,0), 14, Color.WHITE, new Color(0xD6D2C6), 5);
         query.putClientProperty("JTextField.placeholderText","파일 이름이나 문서 내용을 입력하세요");
@@ -636,8 +644,9 @@ public final class OfficeMarkdown {
         });
         scope.addActionListener(e -> {
             invalidateResultScope();
-            boolean nextPicture = scope.getSelectedItem() == SearchIndex.Scope.IMAGE;
-            if (!nextPicture) keywordScope = (SearchIndex.Scope)scope.getSelectedItem();
+            var nextScope = (SearchIndex.Scope)scope.getSelectedItem();
+            boolean nextPicture = nextScope == SearchIndex.Scope.IMAGE;
+            if (!nextPicture) keywordScope = nextScope;
             if (nextPicture != pictureInput) {
                 if (pictureInput) pictureDraft = query.getText();
                 else keywordDraft = query.getText();
@@ -647,8 +656,12 @@ public final class OfficeMarkdown {
             if (!agentMode.isSelected())
                 (scope.getSelectedItem() == SearchIndex.Scope.IMAGE ? imageMode : keywordMode).setSelected(true);
             updateReferenceContext();
-            query.putClientProperty("JTextField.placeholderText",scope.getSelectedItem() == SearchIndex.Scope.IMAGE
-                    ? "그림 속 글자나 그림 설명을 입력하세요" : "파일 이름이나 문서 내용을 입력하세요");
+            mode.setEnabled(!working && nextScope != SearchIndex.Scope.ROLE);
+            query.putClientProperty("JTextField.placeholderText", switch (nextScope) {
+                case IMAGE -> "그림 속 글자나 그림 설명을 입력하세요";
+                case ROLE -> "문서 역할 이름을 입력하세요";
+                default -> "파일 이름이나 문서 내용을 입력하세요";
+            });
             if (search.isEnabled() && !agentMode.isSelected()) refresh("");
         });
         mode.addActionListener(e -> {
@@ -692,7 +705,7 @@ public final class OfficeMarkdown {
             if (showImport) choose(false);
             else {
                 query.setText("");
-                if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE) {
+                if (scope.getSelectedItem() == SearchIndex.Scope.IMAGE || scope.getSelectedItem() == SearchIndex.Scope.ROLE) {
                     keywordDraft="";
                     scope.setSelectedItem(SearchIndex.Scope.ALL);
                 } else refresh("");
@@ -751,6 +764,10 @@ public final class OfficeMarkdown {
         pictureLocation.setVisible(picture);
         for (JButton b : List.of(original, locate, note)) b.setEnabled(hit != null);
         copyPath.setEnabled(hit != null);
+        selectedDocumentRole = null;
+        roleButton.setEnabled(false);
+        roleButton.setText("역할 ▼");
+        roleButton.setToolTipText("문서 역할 바꾸기");
         if (hit==null) {preview.setText(""); pathText.setText(""); detailTitle.setText(""); sectionLabel.setText(""); return;}
         detailTitle.setText(hit.title()); detailTitle.setToolTipText(hit.title());
         String location=picture ? hit.picture().location() : hit.section();
@@ -763,18 +780,20 @@ public final class OfficeMarkdown {
         preview.setText(excerpt); highlight(); preview.setCaretPosition(0);
         viewer.setText("문서를 불러오는 중…");
         if (picture) loadPicture(hit);
-        roleButton.setText("역할 ▼");
         reader=new SwingWorker<>() {
-            private String role;
+            private SearchIndex.DocumentRole role;
             protected List<MarkdownReader.Page> doInBackground() throws Exception {
-                try {role=SearchIndex.documentRole(hit.md());} catch(IOException ignored){role="확인 불가";}
+                try {
+                    role = SearchIndex.documentRoleSetting(hit.md());
+                } catch (IOException ignored) {
+                    role = new SearchIndex.DocumentRole("확인 불가", SearchIndex.AUTOMATIC_ROLE);
+                }
                 return MarkdownReader.read(hit.md());
             }
             protected void done() {
                 if(isCancelled() || selectedHit()!=hit) return;
                 try {
                     var sections=get();
-                    roleButton.setText("역할: "+role+" ▼");
                     loadingChapters=true;
                     chapters.setModel(new DefaultComboBoxModel<>(sections.toArray(MarkdownReader.Page[]::new)));
                     int index=MarkdownReader.locate(sections,hit);
@@ -782,6 +801,7 @@ public final class OfficeMarkdown {
                     chapters.setSelectedIndex(index);
                     loadingChapters=false; renderChapter();
                 } catch(Exception e) { loadingChapters=false; viewer.setText("문서를 읽을 수 없습니다."); }
+                if (role != null) showDocumentRole(role);
             }
         };
         reader.execute();
@@ -964,24 +984,56 @@ public final class OfficeMarkdown {
         }
     }
 
-    private void editRole(){
-        var hit=selectedHit();
-        if(hit==null || working)return;
-        var choices=new ArrayList<String>();
-        choices.add("자동 분류");
-        for(var kind:PmReference.Kind.values())choices.add(kind.label);
-        choices.add("미분류");
-        var choice=JOptionPane.showInputDialog(frame,hit.title(),"문서 역할 변경",JOptionPane.PLAIN_MESSAGE,
-                null,choices.toArray(),null);
-        if(choice==null)return;
-        new SwingWorker<String,Void>(){
-            protected String doInBackground()throws Exception{
-                SearchIndex.setDocumentRole(hit.md(),choice.toString());
-                return SearchIndex.documentRole(hit.md());
+    private static JComboBox<String> roleSelector(String selected) {
+        var roles = new ArrayList<>(List.of(SearchIndex.AUTOMATIC_ROLE, SearchIndex.UNCLASSIFIED_ROLE,
+                "회의록", "정책·규정", "교육 자료", "참고 자료", "업무 기록"));
+        for (var kind : PmReference.Kind.values()) roles.add(kind.label);
+        var selector = new JComboBox<>(roles.toArray(String[]::new));
+        selector.setEditable(true);
+        selector.setPrototypeDisplayValue("문서 역할 이름을 입력하세요");
+        selector.setSelectedItem(selected);
+        selector.setToolTipText("목록에서 선택하거나 역할 이름을 직접 입력하세요.");
+        selector.getAccessibleContext().setAccessibleName("문서 역할");
+        return selector;
+    }
+
+    private static String roleSelection(JComboBox<String> selector) {
+        return Objects.toString(selector.getEditor().getItem(), SearchIndex.AUTOMATIC_ROLE);
+    }
+
+    private void showDocumentRole(SearchIndex.DocumentRole role) {
+        selectedDocumentRole = role;
+        String label = role.label();
+        String brief = label.codePointCount(0, label.length()) > 20
+                ? label.substring(0, label.offsetByCodePoints(0, 20)) + "…" : label;
+        roleButton.setEnabled(true);
+        roleButton.setText("역할: " + brief + " ▼");
+        roleButton.setToolTipText("문서 역할 바꾸기 · " + label);
+    }
+
+    private void editRole() {
+        var hit = selectedHit();
+        if (hit == null || working || selectedDocumentRole == null) return;
+        var selector = roleSelector(selectedDocumentRole.selection());
+        if (JOptionPane.showConfirmDialog(frame, new Object[]{"역할을 선택하거나 직접 입력하세요.", selector},
+                "문서 역할 변경", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        String selection = roleSelection(selector);
+        roleButton.setEnabled(false);
+        new SwingWorker<SearchIndex.DocumentRole, Void>() {
+            protected SearchIndex.DocumentRole doInBackground() throws Exception {
+                SearchIndex.setDocumentRole(hit.md(), selection);
+                return SearchIndex.documentRoleSetting(hit.md());
             }
-            protected void done(){
-                try{String role=get();if(hit.equals(selectedHit()))roleButton.setText("역할: "+role+" ▼");}
-                catch(Exception ex){error(ex);}
+            protected void done() {
+                try {
+                    var role = get();
+                    if (hit.equals(selectedHit())) showDocumentRole(role);
+                    if (!working && lastSearch != null && lastSearch.scope() == SearchIndex.Scope.ROLE)
+                        searchCached(lastSearch, lastSearchSummary);
+                } catch (Exception ex) {
+                    if (hit.equals(selectedHit())) roleButton.setEnabled(true);
+                    error(ex);
+                }
             }
         }.execute();
     }
@@ -1001,7 +1053,7 @@ public final class OfficeMarkdown {
         enrichPictures.setEnabled(!value);
         resumeRepair.setEnabled(!value);
         keywordMode.setEnabled(!value); imageMode.setEnabled(!value);
-        scope.setEnabled(!value); query.setEditable(!value); mode.setEnabled(!value);
+        scope.setEnabled(!value); query.setEditable(!value); mode.setEnabled(!value && scope.getSelectedItem() != SearchIndex.Scope.ROLE);
         latestOnly.setEnabled(!value);
         largeOptions.setEnabled(!value && indexWorker == null);
         ocrMode.setEnabled(!value); reconvertSameName.setEnabled(!value);
@@ -1255,7 +1307,7 @@ public final class OfficeMarkdown {
         boolean pictures = request.scope() == SearchIndex.Scope.IMAGE;
         boolean all = request.needle().isBlank();
         setResultView(pictures ? ResultView.PICTURE : ResultView.DOCUMENT);
-        activeWords = request.mode().words(request.needle());
+        activeWords = request.scope() == SearchIndex.Scope.ROLE ? List.of(request.needle().strip()) : request.mode().words(request.needle());
         count.setText((preview ? "문구 일치 임시 결과" : pictures ? "그림 결과" : all ? "문서 목록" : "검색 결과") + "   "
                 + hits.size() + (hits.size() == LIMIT ? "+" : ""));
         showImport = !pictures && all && hits.isEmpty();
@@ -1648,6 +1700,8 @@ public final class OfficeMarkdown {
         var plan = LibraryStyle.panel(new BorderLayout(0,8),4);
         plan.add(LibraryStyle.label("변환할 파일과 폴더를 선택하세요",18,true,LibraryStyle.INK),BorderLayout.NORTH);
         plan.add(new JScrollPane(chosen));
+        importRole.setSelectedItem(SearchIndex.AUTOMATIC_ROLE);
+        importRole.getEditor().setItem(SearchIndex.AUTOMATIC_ROLE);
         plan.add(importOptions,BorderLayout.SOUTH);
         if (JOptionPane.showConfirmDialog(frame, plan, "문서 추가 · 변환 설정",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
@@ -1658,12 +1712,13 @@ public final class OfficeMarkdown {
         if (engine == null) return;
         boolean filterLatest = latestOnly.isSelected();
         boolean reconvert = reconvertSameName.isSelected();
+        String role = roleSelection(importRole);
         int workers = (Integer) conversionWorkers.getSelectedItem();
         busy(true, "변환할 파일을 찾는 중…");
         new SwingWorker<BatchConversion.Result, BatchConversion.Progress>() {
             protected BatchConversion.Result doInBackground() throws Exception {
                 return BatchConversion.run(paths, library, reconvert, engine, workers, this::publish,
-                        filterLatest ? preview -> LatestVersionDialog.confirm(frame, preview) : null);
+                        filterLatest ? preview -> LatestVersionDialog.confirm(frame, preview) : null, role);
             }
             protected void process(List<BatchConversion.Progress> updates) {
                 var latest = updates.getLast();

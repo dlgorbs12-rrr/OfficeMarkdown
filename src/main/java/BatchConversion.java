@@ -33,6 +33,7 @@ final class BatchConversion {
     private static final int INDEX_BATCH_SIZE = 32;
     private static final long INDEX_INTERVAL_NS = 2_000_000_000L;
     private final Consumer<Progress> progress;
+    private final String roleSelection;
     private final List<String> details = new ArrayList<>();
     private final Set<Path> unindexed = new LinkedHashSet<>();
     private Phase phase = Phase.SCANNING;
@@ -41,8 +42,9 @@ final class BatchConversion {
     private Path lastMarkdown;
     private int workers = 1;
 
-    private BatchConversion(Consumer<Progress> progress) {
+    private BatchConversion(Consumer<Progress> progress, String roleSelection) {
         this.progress = progress;
+        this.roleSelection = roleSelection;
     }
 
     static Result run(List<Path> inputs, Path library, boolean reconvertSameName, ImageOcr.Mode mode,
@@ -52,8 +54,15 @@ final class BatchConversion {
 
     static Result run(List<Path> inputs, Path library, boolean reconvertSameName, ImageOcr.Mode mode,
                       int requestedWorkers, Consumer<Progress> progress, LatestPreviewConfirmation confirmation) throws IOException {
+        return run(inputs, library, reconvertSameName, mode, requestedWorkers, progress, confirmation,
+                SearchIndex.AUTOMATIC_ROLE);
+    }
+
+    static Result run(List<Path> inputs, Path library, boolean reconvertSameName, ImageOcr.Mode mode,
+                      int requestedWorkers, Consumer<Progress> progress, LatestPreviewConfirmation confirmation,
+                      String roleSelection) throws IOException {
         var parallelism = new BatchParallelism(mode, requestedWorkers, Runtime.getRuntime().availableProcessors());
-        return new BatchConversion(progress).run(inputs, library, reconvertSameName, mode, parallelism, confirmation);
+        return new BatchConversion(progress, roleSelection).run(inputs, library, reconvertSameName, mode, parallelism, confirmation);
     }
 
     private Result run(List<Path> inputs, Path library, boolean reconvertSameName, ImageOcr.Mode mode,
@@ -210,7 +219,7 @@ final class BatchConversion {
         phase = Phase.INDEXING;
         publish(count + "개 문서", true);
         try {
-            var completion = SearchIndex.indexCompletedDetailed(library, List.copyOf(unindexed));
+            var completion = SearchIndex.indexCompletedDetailed(library, List.copyOf(unindexed), roleSelection);
             indexed += completion.indexed();
             deferred += completion.deferred();
             int missing = count - completion.indexed() - completion.deferred();

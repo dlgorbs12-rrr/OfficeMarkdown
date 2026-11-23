@@ -1,6 +1,7 @@
 import com.google.gson.*;
 import java.nio.file.*;
 import java.util.*;
+import javax.swing.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
@@ -60,6 +61,45 @@ class OfficeIndexMcpTest {
         server.call("read_evidence",json("{'document':'1','query':'연동항목'}"));
         assertTrue(Files.readString(root.resolve("E1")).contains("연동항목"));
     }
+
+    @Test void replyListsEachCitedChunkOnceEvenWhenDifferentQueriesReadIt() throws Exception {
+        Files.writeString(root.resolve("example.md"),"# Guide\n\n[원본 파일 열기](<"
+                +root.resolve("example.docx").toUri()+">)\n\n## Setup\n\n"
+                +"alpha " + "a".repeat(1500) + " bravo\ncharlie\n");
+        SearchIndex.synchronize(root,p->{});
+        Files.writeString(root.resolve("config"),OfficeIndexMcp.JSON.toJson(Map.of("root",root.toString())));
+        var server=new OfficeIndexMcp(root);
+        server.call("search",json("{'query':'Guide','field':'title'}"));
+        for(String term:List.of("alpha","bravo","charlie")){
+            var query=json("{'document':'1','section':'Setup'}");
+            query.addProperty("query",term);
+            assertEquals(1,server.call("read_evidence",query).size());
+        }
+
+        var reply=McpSearch.citedReply("First [E1], later [E2], repeated [E1], separate [E3], unknown [E9]",root);
+        assertEquals(List.of("E1","E3"),reply.sources().stream().map(DocumentAgent.Claim::answer).toList());
+        assertEquals(Set.of("E1","E2","E3"),reply.citations().keySet());
+        var citation=reply.citations().get("E2");
+        assertSame(reply.sources().getFirst(),citation.source());
+        assertTrue(citation.claim().proof().excerpt().contains("bravo"));
+        assertFalse(citation.source().proof().excerpt().contains("bravo"));
+
+        var display=AgentDialog.class.getDeclaredMethod("displayReply",JPanel.class,McpSearch.Reply.class,
+                String.class,String.class,SearchIndex.Focus.class);
+        display.setAccessible(true);
+        var render=new java.util.concurrent.FutureTask<Void>(()->{
+            var dialog=new AgentDialog(root,hit->{},hit->{});
+            var body=new JPanel();
+            display.invoke(dialog,body,reply,"","",null);
+            assertEquals(2,Arrays.stream(body.getComponents()).filter(component ->
+                    component instanceof JButton button && button.getText().endsWith("크게 보기")).count());
+            assertTrue(((JEditorPane)body.getComponent(0)).getText().contains("href=\"#E2\""));
+            return null;
+        });
+        SwingUtilities.invokeAndWait(render);
+        render.get();
+    }
+
     @Test void naturalSearchLimitsDocumentsAfterChoosingTheirBestSections() throws Exception {
         StringBuilder body=new StringBuilder();
         for(int i=0;i<14;i++)body.append("## Section "+i+"\nalpha bravo\n");

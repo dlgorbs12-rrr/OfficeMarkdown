@@ -37,7 +37,8 @@ final class AgentDialog extends JPanel {
     private final JSplitPane results=new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
     private final JTabbedPane documentTabs=new JTabbedPane();
     private final ChatTargets targets=new ChatTargets(this::checkedScope,this::previewTarget);
-    private final java.util.IdentityHashMap<DocumentAgent.Claim,List<DocumentAgent.Claim>> answerGroups=new java.util.IdentityHashMap<>();
+    private record PreviewGroup(List<DocumentAgent.Claim> claims,DocumentAgent.Claim source) {}
+    private final java.util.IdentityHashMap<DocumentAgent.Claim,PreviewGroup> answerGroups=new java.util.IdentityHashMap<>();
     private final JButton previous=new JButton("이전 출처"),next=new JButton("다음 출처");
     private final JComboBox<Integer> zoom=new JComboBox<>(new Integer[]{50,75,100,125,150,200});
     private final JPanel foundTab=new JPanel(new BorderLayout());
@@ -112,7 +113,10 @@ final class AgentDialog extends JPanel {
         });
         LibraryStyle.button(settings,false);
         body.add(top,BorderLayout.NORTH);
-        providers.addActionListener(e->loadModelSettings());
+        providers.addActionListener(e->{
+            AgentConnection.prefer(provider());
+            loadModelSettings();
+        });
         loadModelSettings();
         modelButton.setIcon(chevron(true));
         modelButton.setHorizontalTextPosition(SwingConstants.LEFT);
@@ -404,7 +408,7 @@ final class AgentDialog extends JPanel {
                 try{
                     var reply=get();var slides=reply.sources();
                     panel.showDeckResults(reply.decks(),AgentDialog.this::showSelected,AgentDialog.this::previewCandidates);
-                    for(var claim:slides)answerGroups.put(claim,slides);
+                    for(var claim:slides)answerGroups.put(claim,new PreviewGroup(slides,claim));
                     documents.append(slides);
                     panel.setStatus("선택한 PPTX "+reply.decks().size()+"개 · 추천 슬라이드 "+slides.size()+"장");
                     if(!slides.isEmpty())showSelected(slides.getFirst());
@@ -415,8 +419,7 @@ final class AgentDialog extends JPanel {
     }
 
     private void displayReply(JPanel body,McpSearch.Reply reply,String prompt,String context,SearchIndex.Focus scope){
-        var citations=new java.util.LinkedHashMap<String,DocumentAgent.Claim>();
-        for(var source:reply.sources())citations.put(source.answer(),source);
+        var citations=reply.citations();
         var message=new JEditorPane("text/html",MarkdownReader.chatHtml(reply.text(),citations.keySet())){
             public Dimension getPreferredSize(){
                 int width=Math.max(120,threadScroll.getViewport().getWidth()-82);
@@ -431,19 +434,18 @@ final class AgentDialog extends JPanel {
         message.setAlignmentX(Component.LEFT_ALIGNMENT);
         message.addHyperlinkListener(e->{
             if(e.getEventType()==javax.swing.event.HyperlinkEvent.EventType.ACTIVATED){
-                var source=citations.get(e.getDescription().replaceFirst("^#",""));
-                if(source!=null)showSelected(source);
+                var citation=citations.get(e.getDescription().replaceFirst("^#",""));
+                if(citation!=null)showSelected(citation.claim());
             }
         });
         body.add(message);
-        documents.append(reply.sources());
-        if(!reply.sources().isEmpty()){
-            for(var claim:reply.sources()){
-                answerGroups.put(claim,reply.sources());
-                var large=new JButton(claim.proof().title()+" · "+claim.proof().section()+"  크게 보기");
-                large.putClientProperty("html.disable",true);
-                large.addActionListener(e->showSelected(claim));body.add(large);
-            }
+        for(var citation:citations.values())
+            answerGroups.put(citation.claim(),new PreviewGroup(reply.sources(),citation.source()));
+        documents.append(citations.values().stream().map(McpSearch.Citation::claim).toList());
+        for(var claim:reply.sources()){
+            var large=new JButton(claim.proof().title()+" · "+claim.proof().section()+"  크게 보기");
+            large.putClientProperty("html.disable",true);
+            large.addActionListener(e->showSelected(claim));body.add(large);
         }
         if(reply.candidates().isEmpty()){
             var empty=new FoundDocuments(List.of());empty.setStatus("이번 답변에서 찾은 문서가 없습니다.");showFound(empty);
@@ -560,7 +562,7 @@ final class AgentDialog extends JPanel {
             return new DocumentAgent.Claim("원본 후보",location,List.of(),List.of(),"직접 확인할 후보 장표",page);
         }).toList();
         manualPreviews.forEach(answerGroups::remove);manualPreviews=candidates;
-        for(var item:candidates)answerGroups.put(item,candidates);
+        for(var item:candidates)answerGroups.put(item,new PreviewGroup(candidates,item));
         if(!candidates.isEmpty())showSelected(candidates.getFirst());
     }
 
@@ -584,12 +586,13 @@ final class AgentDialog extends JPanel {
         previewWindow.setTitle(hit.title()+" · "+hit.section());
         if(!previewWindow.isVisible())previewWindow.setVisible(true);
         previewWindow.toFront();
-        var group=answerGroups.getOrDefault(claim,List.of(claim));
+        var group=answerGroups.getOrDefault(claim,new PreviewGroup(List.of(claim),claim));
         var choices=new DefaultComboBoxModel<PreviewChoice>();
-        for(var item:group)choices.addElement(new PreviewChoice(item));
+        for(var item:group.claims())choices.addElement(new PreviewChoice(item==group.source()?claim:item));
         choices.setSelectedItem(new PreviewChoice(claim));previewChoices.setModel(choices);
-        previewChoices.setVisible(group.size()>1);
-        int at=group.indexOf(claim);previous.setEnabled(at>0);next.setEnabled(at>=0 && at+1<group.size());
+        previewChoices.setVisible(group.claims().size()>1);
+        int at=group.claims().indexOf(group.source());
+        previous.setEnabled(at>0);next.setEnabled(at>=0 && at+1<group.claims().size());
         previewBitmap=null;previewHtml="";
         String heading="<html><head><style>body{font-family:'Malgun Gothic';font-size:11pt;color:#25251f;margin:10px}"
                 +"h2{font-size:15pt;margin:0 0 5px} .section{color:#b74323;font-weight:bold}"
@@ -629,8 +632,8 @@ final class AgentDialog extends JPanel {
     private void stepPreview(int delta){
         var group=answerGroups.get(selected);
         if(group==null)return;
-        int index=group.indexOf(selected)+delta;
-        if(index>=0 && index<group.size())showSelected(group.get(index));
+        int index=group.claims().indexOf(group.source())+delta;
+        if(index>=0 && index<group.claims().size())showSelected(group.claims().get(index));
     }
     private void renderPreview(){
         int percent=(Integer)zoom.getSelectedItem();

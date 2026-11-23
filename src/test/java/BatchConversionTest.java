@@ -44,6 +44,22 @@ class BatchConversionTest {
         assertEquals(1, BatchConversion.run(List.of(distinctExtension), library, false, ImageOcr.Mode.OFF, 2, ignored -> {}).converted());
     }
 
+    @Test void uploadedDocumentsCanBeFoundByTheirCustomRole() throws Exception {
+        Path library = root.resolve("library");
+        Path policy = workbook(root.resolve("설정 현황.xlsx"));
+        Path unrelated = workbook(root.resolve("보안 café 정책.xlsx"));
+        var result = BatchConversion.run(List.of(policy), library, true, ImageOcr.Mode.OFF, 1, ignored -> {}, null,
+                "보안 CAFÉ 정책");
+        assertEquals(1, result.indexed());
+        assertEquals("보안 CAFÉ 정책", SearchIndex.documentRole(result.lastMarkdown()));
+
+        BatchConversion.run(List.of(unrelated), library, true, ImageOcr.Mode.OFF, 1, ignored -> {});
+        BatchConversion.run(List.of(policy), library, true, ImageOcr.Mode.OFF, 1, ignored -> {});
+        var hits = SearchIndex.searchCached(library, "café", SearchIndex.Scope.ROLE, SearchIndex.Mode.RELEVANCE, 10);
+        assertEquals(List.of(policy.toRealPath()), hits.stream().map(Library.Hit::source).toList());
+        assertEquals("보안 CAFÉ 정책", hits.getFirst().excerpt());
+    }
+
     @Test void rowsCompleteAcrossFailuresDuplicatesAndNestedFolder() throws Exception {
         Path bad = Files.createDirectories(root.resolve("broken")).resolve("same.xlsx");
         Files.writeString(bad, "Invalid workbook");

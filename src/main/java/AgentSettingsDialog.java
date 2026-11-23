@@ -4,12 +4,14 @@ import java.util.concurrent.Callable;
 import javax.swing.*;
 
 final class AgentSettingsDialog extends JDialog {
+    private static final String TEST_PASSED="최근 연결 테스트 성공";
     private final JComboBox<DocumentAgent.Provider> agents=new JComboBox<>(DocumentAgent.Provider.values());
     private final JTextField location=new JTextField();
     private final JLabel auth=new JLabel(),test=new JLabel();
     private final JButton login=new JButton("로그인 열기"),probe=new JButton("연결 테스트"),refresh=new JButton("다시 확인");
     private final JLabel guideText=new JLabel();
     private SwingWorker<?,?> worker;
+    private Path executable;
     private boolean saved;
 
     static DocumentAgent.Provider open(Window parent,DocumentAgent.Provider selected){
@@ -64,12 +66,14 @@ final class AgentSettingsDialog extends JDialog {
         login.addActionListener(e->{try{AgentConnection.login(selected());auth.setText("열린 터미널·브라우저에서 로그인한 뒤 ‘다시 확인’을 누르세요.");}catch(Exception ex){message(ex);}});
         refresh.addActionListener(e->inspect());
         probe.addActionListener(e->{
-            var p=selected();test.setText("에이전트 응답 확인 중…");
+            var p=selected();
+            Path testedExecutable=executable;
+            test.setText("에이전트 응답 확인 중…");
             run(()->{
                 String reply=DocumentAgent.invoke(p,"Return exactly OFFICE_CONNECTED and nothing else. Do not use tools.");
                 if(!reply.strip().equals("OFFICE_CONNECTED"))throw new java.io.IOException("예상한 테스트 응답을 받지 못했습니다.");
-                return "연결 성공 · 문서에 질문할 수 있습니다.";
-            },test);
+                return TEST_PASSED;
+            },test,testedExecutable);
         });
         use.addActionListener(e->{AgentConnection.prefer(selected());saved=true;dispose();});
         close.addActionListener(e->dispose());
@@ -97,26 +101,36 @@ final class AgentSettingsDialog extends JDialog {
     private void message(Exception ex){JOptionPane.showMessageDialog(this,ex.getMessage(),"에이전트 연결 설정",JOptionPane.INFORMATION_MESSAGE);}
     private void inspect(){
         if(worker!=null)worker.cancel(true);
+        executable=null;
         var p=selected();test.setText("연결 테스트 전");
         guideText.setText("Windows용 "+p+" CLI를 설치한 뒤 ‘다시 확인’을 누르세요.");
         try{
-            Path exe=p.executable();location.setText(exe.toString());location.setCaretPosition(0);
+            Path exe=p.executable();executable=exe;location.setText(exe.toString());location.setCaretPosition(0);
+            if(AgentConnection.passedTest(p,exe))test.setText(TEST_PASSED);
             auth.setText("인증 상태 확인 중…");login.setEnabled(true);probe.setEnabled(true);
-            run(()->AgentConnection.auth(p,exe),auth);
+            run(()->AgentConnection.auth(p,exe),auth,null);
         }catch(Exception ex){
             location.setText("실행 파일을 찾을 수 없습니다. 설치 후 "+p.exe+".exe를 지정할 수 있습니다.");
             auth.setText("CLI 설치 후 로그인할 수 있습니다.");login.setEnabled(false);probe.setEnabled(false);refresh.setEnabled(true);
         }
     }
-    private void run(Callable<String> action,JLabel label){
+    private void run(Callable<String> action,JLabel label,Path testedExecutable){
         if(worker!=null)worker.cancel(true);
+        var provider=selected();
         probe.setEnabled(false);refresh.setEnabled(false);
         var job=new SwingWorker<String,Void>(){
             protected String doInBackground()throws Exception{return action.call();}
             protected void done(){
                 if(isCancelled() || worker!=this)return;
-                try{label.setText(get());}
-                catch(Exception ex){label.setText("확인 실패 · 로그인, 구독 또는 CLI 상태를 확인하세요.");message(ex.getCause() instanceof Exception cause?cause:ex);}
+                try{
+                    String result=get();
+                    if(testedExecutable!=null)AgentConnection.testResult(provider,testedExecutable,true);
+                    label.setText(result);
+                }catch(Exception ex){
+                    if(testedExecutable!=null)AgentConnection.testResult(provider,testedExecutable,false);
+                    label.setText("확인 실패 · 로그인, 구독 또는 CLI 상태를 확인하세요.");
+                    message(ex.getCause() instanceof Exception cause?cause:ex);
+                }
                 finally{probe.setEnabled(true);refresh.setEnabled(true);}
             }
         };worker=job;job.execute();

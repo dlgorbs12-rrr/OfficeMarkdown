@@ -46,6 +46,23 @@ class PmReferenceTest {
         assertEquals("운영 가이드",SearchIndex.documentRole(plain));
     }
 
+    @Test void keepsCustomDocumentRoleAcrossReindex() throws Exception {
+        note("업무 운영 가이드", "## 절차\n설정 방법\n");
+        Path document = root.resolve("업무 운영 가이드.md");
+        SearchIndex.synchronize(root, ignored -> {});
+        SearchIndex.setDocumentRole(document, "  보안 정책  ");
+        assertEquals("보안 정책", SearchIndex.documentRole(document));
+        assertEquals("보안 정책", SearchIndex.documentRoleSetting(document).selection());
+        Files.writeString(document, "추가 근거\n", java.nio.file.StandardOpenOption.APPEND);
+        SearchIndex.synchronize(root, ignored -> {});
+        assertEquals("보안 정책", SearchIndex.documentRole(document));
+        SearchIndex.setDocumentRole(document, "자동 분류");
+        assertEquals("운영 가이드", SearchIndex.documentRole(document));
+        assertEquals("자동 분류", SearchIndex.documentRoleSetting(document).selection());
+        var legacyRole = SearchIndex.searchCached(root, "운영 가이드", SearchIndex.Scope.ROLE, SearchIndex.Mode.PHRASE, 10);
+        assertEquals(List.of(document), legacyRole.stream().map(Library.Hit::md).toList());
+    }
+
     @Test void classifiesUnchangedDocumentsInAnOlderIndex()throws Exception{
         note("중립 제목","## 시트 · 사전조사표\n업무시스템과 인증방식\n");
         SearchIndex.synchronize(root,p->{});

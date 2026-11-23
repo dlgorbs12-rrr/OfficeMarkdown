@@ -14,6 +14,14 @@ final class AgentConnection {
         catch(IllegalArgumentException e){return DocumentAgent.Provider.CODEX;}
     }
     static void prefer(DocumentAgent.Provider p){PREF.put("default",p.name());}
+    static boolean passedTest(DocumentAgent.Provider p,Path executable){
+        return executable.normalize().toString().equals(PREF.get("tested."+p.name(),""));
+    }
+    static void testResult(DocumentAgent.Provider p,Path executable,boolean success){
+        String key="tested."+p.name();
+        if(success)PREF.put(key,executable.normalize().toString());
+        else if(passedTest(p,executable))PREF.remove(key);
+    }
     static DocumentAgent.Effort effort(DocumentAgent.Provider provider){
         String stored=PREF.get("effort."+provider.name(),"DEFAULT");
         for(var choice:DocumentAgent.Effort.choices(provider))if(choice.name().equals(stored))return choice;
