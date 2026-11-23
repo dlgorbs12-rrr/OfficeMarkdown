@@ -8,6 +8,8 @@
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
+설치가 끝나면 완료 알림이 표시됩니다. 자동화 환경에서는 `-NoCompletionDialog`를 지정하면 콘솔에서 결과를 확인할 수 있습니다.
+
 소스 폴더가 없는 PC에서는 아래 명령을 PowerShell에 붙여 넣으세요. 저장소의 설치 스크립트를 임시 파일로 받아 실행합니다.
 
 ```powershell

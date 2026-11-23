@@ -7,11 +7,15 @@ import java.util.*;
 /** Stdio search server. Candidate handles belong to the connected client session. */
 public final class OfficeIndexMcp {
     static final Gson JSON=new Gson();
+    // Read windows can differ for the same row. The table and stamp distinguish reused row IDs.
+    record Chunk(String md,String stamp,boolean image,long row) {}
     record Row(String md,String source,String title,String section,String text,String picture,String location,
-               int slide,String version,String sha256) {
-        Row(String md,String source,String title,String section,String text,String picture,String location) {
-            this(md,source,title,section,text,picture,location,0,null,null);
+               int slide,String version,String sha256,Chunk chunk) {
+        Row(String md,String source,String title,String section,String text,String picture,String location,
+            int slide,String version,String sha256) {
+            this(md,source,title,section,text,picture,location,slide,version,sha256,null);
         }
+
         ReferenceIndex.Page currentPage(Library.Hit hit) throws IOException {
             if(slide==0)return null;
             var page=new ReferenceIndex.Page(hit,slide,version,text,sha256);
@@ -158,6 +162,7 @@ public final class OfficeIndexMcp {
         String snippetStart="1";
         if(!term.isEmpty()){snippetStart="max(1,instr("+folded+",?)-120)";args.add(term);}
         String sql="SELECT d.md,d.source,d.title,"+(title?"''":"p.section")+",substr("+expr+","+snippetStart+",1400),"+(image?"p.path,p.location":"'', ''")
+                +(read?",p.id,d.stamp":"")
                 +" FROM visible_docs d"+(join?" JOIN "+table+" p ON p.doc=d.id":"")+" WHERE 1=1";
         if(join && !image)sql+=" AND p.kind=2";
         if(!doc.isEmpty()){sql+=" AND d.md=?";args.add(doc);}
@@ -191,16 +196,18 @@ public final class OfficeIndexMcp {
         if(offset<0 || offset>100000)throw new IllegalArgumentException("Invalid offset");
         String query=sql+" OFFSET "+offset;
         var rows=SearchIndex.readIndex(notes,db->{
-            // SQLite lower() only folds ASCII. Use the same normalization as indexed text.
-            org.sqlite.Function.create(db,"office_lower",new org.sqlite.Function() {
-                @Override protected void xFunc() throws java.sql.SQLException {
-                    result(value_text(0).toLowerCase(Locale.ROOT));
-                }
-            },1,org.sqlite.Function.FLAG_DETERMINISTIC);
+            SearchIndex.registerUnicodeLower(db);
             var found=new ArrayList<Row>();
             try(var st=db.prepareStatement(query)){
                 for(int i=0;i<args.size();i++)st.setString(i+1,args.get(i));
-                try(var rs=st.executeQuery()){while(rs.next())found.add(new Row(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7)));}
+                try(var rs=st.executeQuery()){
+                    while(rs.next()){
+                        String md=rs.getString(1);
+                        var chunk=read?new Chunk(md,rs.getString(9),image,rs.getLong(8)):null;
+                        found.add(new Row(md,rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),
+                                rs.getString(6),rs.getString(7),0,null,null,chunk));
+                    }
+                }
             }
             return found;
         });

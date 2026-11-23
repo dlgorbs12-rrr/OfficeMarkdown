@@ -29,12 +29,14 @@ class LargeIndexTest {
         }
         assertEquals(new SearchIndex.Completion(1, 0), SearchIndex.indexCompletedDetailed(library, List.of(note)));
         Files.writeString(note, "\nlatest change\n", StandardOpenOption.APPEND);
-        assertEquals(new SearchIndex.Completion(0, 1), SearchIndex.indexCompletedDetailed(library, List.of(note)));
+        assertEquals(new SearchIndex.Completion(0, 1), SearchIndex.indexCompletedDetailed(library, List.of(note), "점검 기록"));
         assertTrue(SearchIndex.searchCached(library, "after update", SearchIndex.Scope.CONTENT, SearchIndex.Mode.PHRASE, 5).isEmpty());
         assertTrue(SearchIndex.search(library, "latest change", SearchIndex.Scope.CONTENT, 5).isEmpty());
+        assertTrue(SearchIndex.searchCached(library, "점검 기록", SearchIndex.Scope.ROLE, SearchIndex.Mode.PHRASE, 5).isEmpty());
         assertEquals(List.of(note), SearchIndex.largeSettings(library).pending().stream().map(SearchIndex.HeldNote::path).toList());
         SearchIndex.configureLarge(library, true, List.of(note));
         assertEquals(1, SearchIndex.search(library, "latest change", SearchIndex.Scope.CONTENT, 5).size());
+        assertEquals("점검 기록", SearchIndex.documentRole(note));
         assertTrue(SearchIndex.largeSettings(library).pending().isEmpty());
     }
 

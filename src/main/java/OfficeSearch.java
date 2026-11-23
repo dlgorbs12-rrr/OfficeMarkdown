@@ -65,7 +65,7 @@ public final class OfficeSearch {
                     }
                     case "--limit" -> limit = Integer.parseInt(args[++i]);
                     case "--help" -> {
-                        System.out.println("OfficeSearch.exe [--scope all|title|content|image] [--mode phrase|and|or|relevance] [--limit 1..500] [--library DIR] [QUERY]");
+                        System.out.println("OfficeSearch.exe [--scope all|title|content|image|role] [--mode phrase|and|or|relevance] [--limit 1..500] [--library DIR] [QUERY]");
                         System.out.println("OfficeSearch.exe --excel-cells SCREEN|INTERFACE REQ-ID MARKDOWN SHEET [SECOND_MARKDOWN SECOND_SHEET]");
                         System.out.println("OfficeSearch.exe --prepare-slide-search  (experimental slide index for an existing library)");
                         System.out.println("OfficeSearch.exe --experimental-slides QUERY");

@@ -52,9 +52,21 @@ final class McpSearch {
         return options;
     }
 
-    record Reply(String text,List<DocumentAgent.Claim> sources,List<Library.Hit> candidates,String expanded) {
+    record Citation(DocumentAgent.Claim claim,DocumentAgent.Claim source) {}
+
+    record Reply(String text,List<DocumentAgent.Claim> sources,List<Library.Hit> candidates,String expanded,
+                 Map<String,Citation> citations) {
+        Reply(String text,List<DocumentAgent.Claim> sources,List<Library.Hit> candidates,String expanded) {
+            this(text,sources,candidates,expanded,citationsFor(sources));
+        }
         Reply(String text,List<DocumentAgent.Claim> sources){
             this(text,sources,sources.stream().map(DocumentAgent.Claim::proof).toList(),null);
+        }
+
+        private static Map<String,Citation> citationsFor(List<DocumentAgent.Claim> sources) {
+            var citations=new LinkedHashMap<String,Citation>();
+            for(var source:sources)citations.put(source.answer(),new Citation(source,source));
+            return Collections.unmodifiableMap(citations);
         }
     }
 
@@ -163,23 +175,33 @@ final class McpSearch {
             String reply=DocumentAgent.invoke(provider,model,effort,prompt,options,cursor::poll);
             if(!cursor.connected)throw new IOException("Office MCP 도구 목록 연결을 확인하지 못했습니다. 에이전트 연결 설정을 확인하세요.");
             if(reply.isBlank())throw new IOException("에이전트가 빈 답변을 반환했습니다.");
-            var refs=java.util.regex.Pattern.compile("\\[(E[1-9][0-9]{0,4})\\]").matcher(reply);
-            var seen=new HashSet<String>();
-            var sources=new ArrayList<DocumentAgent.Claim>();
-            while(refs.find()){
-                String id=refs.group(1);
-                if(!seen.add(id) || !Files.isRegularFile(session.resolve(id)))continue;
-                var row=OfficeIndexMcp.JSON.fromJson(Files.readString(session.resolve(id)),OfficeIndexMcp.Row.class);
-                var pic=row.picture().isEmpty()?null:new PictureAssets.Reference(row.picture(),row.location());
-                var hit=new Library.Hit(Path.of(row.md()),Path.of(row.source()),row.title(),row.section(),row.text(),pic);
-                var page=row.currentPage(hit);
-                sources.add(page==null ? new DocumentAgent.Claim(id,hit) : new DocumentAgent.Claim(id,hit,List.of(),List.of(),"",page));
-            }
-            return new Reply(reply,List.copyOf(sources));
+            return citedReply(reply,session);
         }finally{
             try(var files=Files.list(session)){for(Path file:files.toList())Files.deleteIfExists(file);}
             Files.deleteIfExists(session);
         }
+    }
+
+    static Reply citedReply(String reply,Path session) throws IOException {
+        var refs=java.util.regex.Pattern.compile("\\[(E[1-9][0-9]{0,4})\\]").matcher(reply);
+        var seen=new HashSet<String>();
+        var sources=new ArrayList<DocumentAgent.Claim>();
+        var chunks=new HashMap<OfficeIndexMcp.Chunk,DocumentAgent.Claim>();
+        var citations=new LinkedHashMap<String,Citation>();
+        while(refs.find()){
+            String id=refs.group(1);
+            if(!seen.add(id) || !Files.isRegularFile(session.resolve(id)))continue;
+            var row=OfficeIndexMcp.JSON.fromJson(Files.readString(session.resolve(id)),OfficeIndexMcp.Row.class);
+            var pic=row.picture().isEmpty()?null:new PictureAssets.Reference(row.picture(),row.location());
+            var hit=new Library.Hit(Path.of(row.md()),Path.of(row.source()),row.title(),row.section(),row.text(),pic);
+            var page=row.currentPage(hit);
+            var claim=new DocumentAgent.Claim(id,hit,List.of(),List.of(),"",page);
+            var source=row.chunk()==null?claim:chunks.computeIfAbsent(row.chunk(),ignored->claim);
+            if(source==claim)sources.add(source);
+            citations.put(id,new Citation(claim,source));
+        }
+        return new Reply(reply,List.copyOf(sources),sources.stream().map(DocumentAgent.Claim::proof).toList(),
+                null,Collections.unmodifiableMap(citations));
     }
 
     static List<DocumentAgent.Claim> ask(Path root,String question,String model,DocumentAgent.Effort effort,
